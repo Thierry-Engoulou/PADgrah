@@ -1,0 +1,8 @@
+uvicorn
+streamlit==1.45.1
+pandas
+requests
+plotly
+folium
+streamlit-folium
+gunicorn

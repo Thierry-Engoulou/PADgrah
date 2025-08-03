@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS demandes (
 conn.commit()
 
 st.set_page_config(page_title="Météo Douala", layout="wide")
-st.title("📊📈📥 Visualisation + exportation de données météo des stations du  – Port Autonome de Douala")
+st.title(" Visualisation des données 📊📈")
 
 # Chargement données
 API_URL = "https://data-real-time-2.onrender.com/donnees?limit=50000000000"

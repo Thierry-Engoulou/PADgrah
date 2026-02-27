@@ -36,7 +36,7 @@ st.set_page_config(page_title="Météo Douala", layout="wide")
 st.title(" Visualisation des données 📊📈")
 
 # Chargement données
-API_URL = "https://data-real-time-2.onrender.com/donnees?limit=50000000000"
+API_URL = "https://data-real-time-6.onrender.com/donnees?limit=50000000000"
 data = requests.get(API_URL).json()
 df = pd.DataFrame(data)
 
@@ -95,3 +95,4 @@ st.subheader("🌐 Carte météo animée – Windy")
 st.components.v1.html('''
 <iframe width="100%" height="450" src="https://embed.windy.com/embed2.html?lat=4.05&lon=9.68&zoom=9&type=wind" frameborder="0"></iframe>
 ''', height=450)
+

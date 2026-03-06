@@ -89,12 +89,25 @@ else:
     # --- Onglets comparaison ---
     tab1, tab2 = st.tabs(["🗓️ 30 derniers jours", "🗕️ Période personnalisée"])
 
+    # Fonction d'échantillonnage pour Plotly
+    def sample_for_plot(df_plot, max_points=5000):
+        """
+        Echantillonne chaque station pour ne pas dépasser max_points par trace
+        """
+        sampled_dfs = []
+        for station, g in df_plot.groupby("Station"):
+            if len(g) > max_points:
+                g = g.iloc[::len(g)//max_points]
+            sampled_dfs.append(g)
+        return pd.concat(sampled_dfs)
+
     with tab1:
         df_last_30 = df[df["DateTime"] >= (df["DateTime"].max() - pd.Timedelta(days=30))].copy()
         for p in params:
             df_plot = df_last_30.dropna(subset=[p])
             if not df_plot.empty:
                 df_plot[p+'_smoothed'] = df_plot[p].rolling(window=window_size, min_periods=1, center=True).mean()
+                df_plot = sample_for_plot(df_plot, max_points=5000)
                 fig = px.line(df_plot, x="DateTime", y=p+'_smoothed', color="Station",
                               title=f"Comparaison – {p} (30 derniers jours)")
                 if p == "TIDE HEIGHT":
@@ -110,6 +123,7 @@ else:
             df_plot = df_custom.dropna(subset=[p])
             if not df_plot.empty:
                 df_plot[p+'_smoothed'] = df_plot[p].rolling(window=window_size, min_periods=1, center=True).mean()
+                df_plot = sample_for_plot(df_plot, max_points=5000)
                 fig = px.line(df_plot, x="DateTime", y=p+'_smoothed', color="Station",
                               title=f"Comparaison – {p} ({start_custom} → {end_custom})")
                 if p == "TIDE HEIGHT":

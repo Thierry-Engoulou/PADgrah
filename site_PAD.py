@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-import plotly.express as px
+import plotly.graph_objects as go
 import sqlite3
 import numpy as np
 from datetime import datetime
@@ -32,7 +32,6 @@ API_URL = "https://data-real-time-2.onrender.com/donnees"
 # --- Fonction récupération par batch ---
 @st.cache_data(ttl=600)
 def load_all_data(batch_limit=2000):
-
     all_data = []
     offset = 0
 
@@ -40,9 +39,7 @@ def load_all_data(batch_limit=2000):
     status = st.empty()
 
     while True:
-
         url = f"{API_URL}?limit={batch_limit}&offset={offset}"
-
         try:
             r = requests.get(url, timeout=30)
             r.raise_for_status()
@@ -56,7 +53,6 @@ def load_all_data(batch_limit=2000):
 
         all_data.extend(data)
         offset += batch_limit
-
         status.text(f"Chargement {len(all_data)} lignes...")
         progress.progress(min(len(all_data)/200000,1.0))
 
@@ -71,20 +67,14 @@ def load_all_data(batch_limit=2000):
 
     return pd.DataFrame(all_data)
 
-
 # --- Bouton chargement ---
 if "df" not in st.session_state:
-
     st.info("Clique sur le bouton pour charger les données.")
-
     if st.button("🚀 Charger les données"):
         st.session_state.df = load_all_data()
-
     st.stop()
 
-
 df = st.session_state.df
-
 
 # --- Nettoyage données ---
 df["DateTime"] = pd.to_datetime(df["DateTime"])
@@ -104,67 +94,49 @@ for p in params:
     df[p] = pd.to_numeric(df[p], errors="coerce")
 
 bool_columns = ["TIDE_HIGH", "TIDE_LOW"]
-
 for col in bool_columns:
     df[col] = df[col].replace({False: np.nan, True: 1})
 
-
 # --- Filtre date ---
 st.sidebar.header("🗓️ Filtrer par date")
-
 min_date = df["DateTime"].min().date()
 max_date = df["DateTime"].max().date()
 
 start_date, end_date = st.sidebar.date_input(
-"Plage de dates",
-[min_date, max_date]
+    "Plage de dates",
+    [min_date, max_date]
 )
 
 df = df[
-(df["DateTime"].dt.date >= start_date) &
-(df["DateTime"].dt.date <= end_date)
+    (df["DateTime"].dt.date >= start_date) &
+    (df["DateTime"].dt.date <= end_date)
 ]
-
 
 # --- Slider lissage ---
 window_size = st.sidebar.slider(
-"Taille fenêtre lissage",
-1,21,5,step=2
+    "Taille fenêtre lissage",
+    1,21,5,step=2
 )
 
-
-# --- Fonction échantillonnage ---
-def sample_data(df,max_points=5000):
-
-    if len(df) <= max_points:
-        return df
-
-    step = len(df)//max_points
-
-    return df.iloc[::step]
-
+# --- Fonction échantillonnage désactivée ---
+def sample_data(df, max_points=500_000):
+    return df  # ne fait plus d'échantillonnage
 
 # --- Onglets ---
 tab1, tab2 = st.tabs([
-"🗓️ 30 derniers jours",
-"📅 Période personnalisée"
+    "🗓️ 30 derniers jours",
+    "📅 Période personnalisée"
 ])
 
-
-# --- 30 jours ---
+# --- 30 derniers jours ---
 with tab1:
-
     df_last_30 = df[
-        df["DateTime"] >=
-        (df["DateTime"].max()-pd.Timedelta(days=30))
+        df["DateTime"] >= (df["DateTime"].max()-pd.Timedelta(days=30))
     ].copy()
 
     for p in params:
-
         df_plot = df_last_30.dropna(subset=[p])
-
         if not df_plot.empty:
-
             df_plot[p+"_smooth"] = df_plot[p].rolling(
                 window=window_size,
                 min_periods=1,
@@ -173,26 +145,26 @@ with tab1:
 
             df_plot = sample_data(df_plot)
 
-            fig = px.line(
-                df_plot,
-                x="DateTime",
-                y=p+"_smooth",
-                color="Station",
-                title=f"{p} (30 derniers jours)"
-            )
-
-            st.plotly_chart(fig,use_container_width=True)
-
+            # --- Graphiques avec Scattergl ---
+            fig = go.Figure()
+            for station in df_plot["Station"].unique():
+                df_s = df_plot[df_plot["Station"] == station]
+                fig.add_trace(go.Scattergl(
+                    x=df_s["DateTime"],
+                    y=df_s[p+"_smooth"],
+                    mode="lines",
+                    name=station
+                ))
+            fig.update_layout(title=f"{p} (30 derniers jours)")
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info(f"Aucune donnée pour {p}")
 
-
-# --- période personnalisée ---
+# --- Période personnalisée ---
 with tab2:
-
-    start_custom,end_custom = st.date_input(
+    start_custom, end_custom = st.date_input(
         "Période",
-        [min_date,max_date],
+        [min_date, max_date],
         key="custom"
     )
 
@@ -202,11 +174,8 @@ with tab2:
     ].copy()
 
     for p in params:
-
         df_plot = df_custom.dropna(subset=[p])
-
         if not df_plot.empty:
-
             df_plot[p+"_smooth"] = df_plot[p].rolling(
                 window=window_size,
                 min_periods=1,
@@ -215,23 +184,23 @@ with tab2:
 
             df_plot = sample_data(df_plot)
 
-            fig = px.line(
-                df_plot,
-                x="DateTime",
-                y=p+"_smooth",
-                color="Station",
-                title=f"{p} ({start_custom} → {end_custom})"
-            )
-
-            st.plotly_chart(fig,use_container_width=True)
-
+            # --- Graphiques avec Scattergl ---
+            fig = go.Figure()
+            for station in df_plot["Station"].unique():
+                df_s = df_plot[df_plot["Station"] == station]
+                fig.add_trace(go.Scattergl(
+                    x=df_s["DateTime"],
+                    y=df_s[p+"_smooth"],
+                    mode="lines",
+                    name=station
+                ))
+            fig.update_layout(title=f"{p} ({start_custom} → {end_custom})")
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info(f"Aucune donnée pour {p}")
 
-
 # --- Carte Windy ---
 st.subheader("🌍 Carte météo – Windy")
-
 st.components.v1.html(
 """
 <iframe width="100%" height="450"

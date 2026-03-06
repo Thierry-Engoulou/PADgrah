@@ -29,13 +29,13 @@ st.title("Visualisation des données 📊📈")
 
 # --- Fonction pour récupérer toutes les données par batch ---
 @st.cache_data(ttl=300)
-def load_all_data(batch_limit=10000):
+def load_all_data(batch_limit=2000):
     all_data = []
     offset = 0
     while True:
         url = f"https://data-real-time-2.onrender.com/donnees?limit={batch_limit}&offset={offset}"
         try:
-            response = requests.get(url, timeout=20)
+            response = requests.get(url, timeout=30)  # timeout plus long pour les batches
             response.raise_for_status()
             data = response.json()
         except Exception as e:
@@ -56,7 +56,7 @@ def load_all_data(batch_limit=10000):
     return df
 
 # --- Chargement des données ---
-df = load_all_data(batch_limit=10000)
+df = load_all_data(batch_limit=2000)
 
 # --- Nettoyage et affichage ---
 if df.empty:
@@ -89,18 +89,17 @@ else:
     # --- Onglets comparaison ---
     tab1, tab2 = st.tabs(["🗓️ 30 derniers jours", "🗕️ Période personnalisée"])
 
-    # Fonction d'échantillonnage pour Plotly
+    # --- Fonction d'échantillonnage pour Plotly ---
     def sample_for_plot(df_plot, max_points=5000):
-        """
-        Echantillonne chaque station pour ne pas dépasser max_points par trace
-        """
         sampled_dfs = []
         for station, g in df_plot.groupby("Station"):
             if len(g) > max_points:
-                g = g.iloc[::len(g)//max_points]
+                step = max(1, len(g)//max_points)
+                g = g.iloc[::step]
             sampled_dfs.append(g)
         return pd.concat(sampled_dfs)
 
+    # --- Onglet 30 derniers jours ---
     with tab1:
         df_last_30 = df[df["DateTime"] >= (df["DateTime"].max() - pd.Timedelta(days=30))].copy()
         for p in params:
@@ -116,6 +115,7 @@ else:
             else:
                 st.info(f"Aucune donnée disponible pour {p} (30 derniers jours)")
 
+    # --- Onglet période personnalisée ---
     with tab2:
         start_custom, end_custom = st.date_input("Période à comparer", [min_date, max_date], key="compare_range")
         df_custom = df[(df["DateTime"].dt.date >= start_custom) & (df["DateTime"].dt.date <= end_custom)].copy()

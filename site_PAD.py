@@ -28,7 +28,7 @@ st.set_page_config(page_title="Météo Douala", layout="wide")
 st.title("Visualisation des données 📊📈")
 
 # --- API ---
-API_URL = "https://data-real-time-2.onrender.com/donnees?limit=5000000"  # limite réaliste
+API_URL =  "https://data-real-time-2.onrender.com/donnees?limit=500000"  # limite réaliste
 
 try:
     response = requests.get(API_URL, timeout=15)
@@ -109,4 +109,5 @@ if not df.empty:
     st.components.v1.html('''
     <iframe width="100%" height="450" src="https://embed.windy.com/embed2.html?lat=4.05&lon=9.68&zoom=9&type=wind" frameborder="0"></iframe>
     ''', height=450)
+
 

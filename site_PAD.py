@@ -27,19 +27,28 @@ conn.commit()
 st.set_page_config(page_title="Météo Douala", layout="wide")
 st.title("Visualisation des données 📊📈")
 
-# --- Fonction pour récupérer toutes les données par batch ---
-@st.cache_data(ttl=300)
+API_URL = "https://data-real-time-2.onrender.com/donnees"
+
+# --- Fonction récupération par batch ---
+@st.cache_data(ttl=600)
 def load_all_data(batch_limit=2000):
+
     all_data = []
     offset = 0
+
+    progress = st.progress(0)
+    status = st.empty()
+
     while True:
-        url = f"https://data-real-time-2.onrender.com/donnees?limit={batch_limit}&offset={offset}"
+
+        url = f"{API_URL}?limit={batch_limit}&offset={offset}"
+
         try:
-            response = requests.get(url, timeout=30)  # timeout plus long pour les batches
-            response.raise_for_status()
-            data = response.json()
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            data = r.json()
         except Exception as e:
-            st.error(f"Erreur lors de la récupération des données : {e}")
+            st.error(f"Erreur API : {e}")
             break
 
         if not data:
@@ -47,93 +56,187 @@ def load_all_data(batch_limit=2000):
 
         all_data.extend(data)
         offset += batch_limit
+
+        status.text(f"Chargement {len(all_data)} lignes...")
+        progress.progress(min(len(all_data)/200000,1.0))
+
         if len(data) < batch_limit:
-            break  # plus de données disponibles
+            break
+
+    progress.empty()
+    status.empty()
 
     if not all_data:
         return pd.DataFrame()
-    df = pd.DataFrame(all_data)
-    return df
 
-# --- Chargement des données ---
-df = load_all_data(batch_limit=2000)
+    return pd.DataFrame(all_data)
 
-# --- Nettoyage et affichage ---
-if df.empty:
-    st.warning("Aucune donnée disponible.")
-else:
-    df["DateTime"] = pd.to_datetime(df["DateTime"])
-    df = df.sort_values("DateTime", ascending=False)
 
-    # Colonnes numériques
-    params = ["TIDE HEIGHT", "WIND SPEED", "WIND DIR", "AIR PRESSURE", 
-              "AIR TEMPERATURE", "DEWPOINT", "HUMIDITY"]
+# --- Bouton chargement ---
+if "df" not in st.session_state:
+
+    st.info("Clique sur le bouton pour charger les données.")
+
+    if st.button("🚀 Charger les données"):
+        st.session_state.df = load_all_data()
+
+    st.stop()
+
+
+df = st.session_state.df
+
+
+# --- Nettoyage données ---
+df["DateTime"] = pd.to_datetime(df["DateTime"])
+df = df.sort_values("DateTime", ascending=False)
+
+params = [
+"TIDE HEIGHT",
+"WIND SPEED",
+"WIND DIR",
+"AIR PRESSURE",
+"AIR TEMPERATURE",
+"DEWPOINT",
+"HUMIDITY"
+]
+
+for p in params:
+    df[p] = pd.to_numeric(df[p], errors="coerce")
+
+bool_columns = ["TIDE_HIGH", "TIDE_LOW"]
+
+for col in bool_columns:
+    df[col] = df[col].replace({False: np.nan, True: 1})
+
+
+# --- Filtre date ---
+st.sidebar.header("🗓️ Filtrer par date")
+
+min_date = df["DateTime"].min().date()
+max_date = df["DateTime"].max().date()
+
+start_date, end_date = st.sidebar.date_input(
+"Plage de dates",
+[min_date, max_date]
+)
+
+df = df[
+(df["DateTime"].dt.date >= start_date) &
+(df["DateTime"].dt.date <= end_date)
+]
+
+
+# --- Slider lissage ---
+window_size = st.sidebar.slider(
+"Taille fenêtre lissage",
+1,21,5,step=2
+)
+
+
+# --- Fonction échantillonnage ---
+def sample_data(df,max_points=5000):
+
+    if len(df) <= max_points:
+        return df
+
+    step = len(df)//max_points
+
+    return df.iloc[::step]
+
+
+# --- Onglets ---
+tab1, tab2 = st.tabs([
+"🗓️ 30 derniers jours",
+"📅 Période personnalisée"
+])
+
+
+# --- 30 jours ---
+with tab1:
+
+    df_last_30 = df[
+        df["DateTime"] >=
+        (df["DateTime"].max()-pd.Timedelta(days=30))
+    ].copy()
+
     for p in params:
-        df[p] = pd.to_numeric(df[p], errors='coerce')
 
-    # Colonnes booléennes
-    bool_columns = ["TIDE_HIGH", "TIDE_LOW"]
-    for col in bool_columns:
-        df[col] = df[col].replace({False: np.nan, True: 1})
+        df_plot = df_last_30.dropna(subset=[p])
 
-    # --- Filtre par date ---
-    st.sidebar.header("🗕️ Filtrer par date")
-    min_date = df["DateTime"].min().date()
-    max_date = df["DateTime"].max().date()
-    start_date, end_date = st.sidebar.date_input("Plage de dates", [min_date, max_date])
-    df = df[(df["DateTime"].dt.date >= start_date) & (df["DateTime"].dt.date <= end_date)]
+        if not df_plot.empty:
 
-    # Slider pour lissage
-    window_size = st.sidebar.slider("Taille fenêtre lissage", 1, 21, 5, step=2)
+            df_plot[p+"_smooth"] = df_plot[p].rolling(
+                window=window_size,
+                min_periods=1,
+                center=True
+            ).mean()
 
-    # --- Onglets comparaison ---
-    tab1, tab2 = st.tabs(["🗓️ 30 derniers jours", "🗕️ Période personnalisée"])
+            df_plot = sample_data(df_plot)
 
-    # --- Fonction d'échantillonnage pour Plotly ---
-    def sample_for_plot(df_plot, max_points=5000):
-        sampled_dfs = []
-        for station, g in df_plot.groupby("Station"):
-            if len(g) > max_points:
-                step = max(1, len(g)//max_points)
-                g = g.iloc[::step]
-            sampled_dfs.append(g)
-        return pd.concat(sampled_dfs)
+            fig = px.line(
+                df_plot,
+                x="DateTime",
+                y=p+"_smooth",
+                color="Station",
+                title=f"{p} (30 derniers jours)"
+            )
 
-    # --- Onglet 30 derniers jours ---
-    with tab1:
-        df_last_30 = df[df["DateTime"] >= (df["DateTime"].max() - pd.Timedelta(days=30))].copy()
-        for p in params:
-            df_plot = df_last_30.dropna(subset=[p])
-            if not df_plot.empty:
-                df_plot[p+'_smoothed'] = df_plot[p].rolling(window=window_size, min_periods=1, center=True).mean()
-                df_plot = sample_for_plot(df_plot, max_points=5000)
-                fig = px.line(df_plot, x="DateTime", y=p+'_smoothed', color="Station",
-                              title=f"Comparaison – {p} (30 derniers jours)")
-                if p == "TIDE HEIGHT":
-                    fig.update_yaxes(range=[0, df_plot[p+'_smoothed'].max()+0.5])
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info(f"Aucune donnée disponible pour {p} (30 derniers jours)")
+            st.plotly_chart(fig,use_container_width=True)
 
-    # --- Onglet période personnalisée ---
-    with tab2:
-        start_custom, end_custom = st.date_input("Période à comparer", [min_date, max_date], key="compare_range")
-        df_custom = df[(df["DateTime"].dt.date >= start_custom) & (df["DateTime"].dt.date <= end_custom)].copy()
-        for p in params:
-            df_plot = df_custom.dropna(subset=[p])
-            if not df_plot.empty:
-                df_plot[p+'_smoothed'] = df_plot[p].rolling(window=window_size, min_periods=1, center=True).mean()
-                df_plot = sample_for_plot(df_plot, max_points=5000)
-                fig = px.line(df_plot, x="DateTime", y=p+'_smoothed', color="Station",
-                              title=f"Comparaison – {p} ({start_custom} → {end_custom})")
-                if p == "TIDE HEIGHT":
-                    fig.update_yaxes(range=[0, df_plot[p+'_smoothed'].max()+0.5])
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info(f"Aucune donnée disponible pour {p} dans cette période")
+        else:
+            st.info(f"Aucune donnée pour {p}")
 
-    # --- Carte Windy ---
-    st.subheader("🌐 Carte météo animée – Windy")
-    st.components.v1.html('''
-    <iframe width="100%" height="450" src="https://embed.windy.com/embed2.html?lat=4.05&lon=9.68&zoom=9&type=wind" frameborder="0"></iframe>
-    ''', height=450)
+
+# --- période personnalisée ---
+with tab2:
+
+    start_custom,end_custom = st.date_input(
+        "Période",
+        [min_date,max_date],
+        key="custom"
+    )
+
+    df_custom = df[
+        (df["DateTime"].dt.date >= start_custom) &
+        (df["DateTime"].dt.date <= end_custom)
+    ].copy()
+
+    for p in params:
+
+        df_plot = df_custom.dropna(subset=[p])
+
+        if not df_plot.empty:
+
+            df_plot[p+"_smooth"] = df_plot[p].rolling(
+                window=window_size,
+                min_periods=1,
+                center=True
+            ).mean()
+
+            df_plot = sample_data(df_plot)
+
+            fig = px.line(
+                df_plot,
+                x="DateTime",
+                y=p+"_smooth",
+                color="Station",
+                title=f"{p} ({start_custom} → {end_custom})"
+            )
+
+            st.plotly_chart(fig,use_container_width=True)
+
+        else:
+            st.info(f"Aucune donnée pour {p}")
+
+
+# --- Carte Windy ---
+st.subheader("🌍 Carte météo – Windy")
+
+st.components.v1.html(
+"""
+<iframe width="100%" height="450"
+src="https://embed.windy.com/embed2.html?lat=4.05&lon=9.68&zoom=9&type=wind"
+frameborder="0"></iframe>
+""",
+height=450
+)

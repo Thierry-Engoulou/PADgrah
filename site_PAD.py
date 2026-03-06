@@ -27,27 +27,41 @@ conn.commit()
 st.set_page_config(page_title="Météo Douala", layout="wide")
 st.title("Visualisation des données 📊📈")
 
-# --- API ---
-API_URL =  "https://data-real-time-2.onrender.com/donnees?limit=500000"  # limite réaliste
+# --- Fonction pour récupérer toutes les données par batch ---
+@st.cache_data(ttl=300)
+def load_all_data(batch_limit=10000):
+    all_data = []
+    offset = 0
+    while True:
+        url = f"https://data-real-time-2.onrender.com/donnees?limit={batch_limit}&offset={offset}"
+        try:
+            response = requests.get(url, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            st.error(f"Erreur lors de la récupération des données : {e}")
+            break
 
-try:
-    response = requests.get(API_URL, timeout=15)
-    response.raise_for_status()
-    data = response.json()
-    if not data:
-        st.warning("L'API a renvoyé une réponse vide.")
-        df = pd.DataFrame()
-    else:
-        df = pd.DataFrame(data)
-except requests.exceptions.RequestException as e:
-    st.error(f"Erreur réseau : {e}")
-    df = pd.DataFrame()
-except ValueError as e:
-    st.error(f"Impossible de décoder le JSON : {e}")
-    df = pd.DataFrame()
+        if not data:
+            break
 
-# --- Nettoyage des données ---
-if not df.empty:
+        all_data.extend(data)
+        offset += batch_limit
+        if len(data) < batch_limit:
+            break  # plus de données disponibles
+
+    if not all_data:
+        return pd.DataFrame()
+    df = pd.DataFrame(all_data)
+    return df
+
+# --- Chargement des données ---
+df = load_all_data(batch_limit=10000)
+
+# --- Nettoyage et affichage ---
+if df.empty:
+    st.warning("Aucune donnée disponible.")
+else:
     df["DateTime"] = pd.to_datetime(df["DateTime"])
     df = df.sort_values("DateTime", ascending=False)
 
@@ -109,5 +123,3 @@ if not df.empty:
     st.components.v1.html('''
     <iframe width="100%" height="450" src="https://embed.windy.com/embed2.html?lat=4.05&lon=9.68&zoom=9&type=wind" frameborder="0"></iframe>
     ''', height=450)
-
-

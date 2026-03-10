@@ -172,9 +172,16 @@ def fetch_all_data(start=None, end=None):
                 r = http_session.get(API_URL, params=params, timeout=30)
                 if r.status_code == 200:
                     resp = r.json()
-                    return resp.get("data", []) if isinstance(resp, dict) else resp
+                    data = resp.get("data", []) if isinstance(resp, dict) else resp
+                    if not data and attempt < 2:
+                        time.sleep(1)
+                        continue
+                    return data
+                else:
+                    st.sidebar.error(f"Erreur API ({r.status_code}) : {r.text[:100]}")
                 time.sleep(1)
-            except Exception:
+            except Exception as e:
+                st.sidebar.warning(f"Erreur tentative {attempt+1} : {e}")
                 time.sleep(2)
         return []
 
@@ -361,6 +368,28 @@ def afficher_graphes(df):
 # ==========================================================
 # INTERFACE
 # ==========================================================
+
+# ==========================================================
+# SIDEBAR DEBUG SCIENTIFIQUE
+# ==========================================================
+
+with st.sidebar:
+    st.divider()
+    st.subheader("🧪 Mode Science Debug")
+    if st.button("Vérifier Connexion API"):
+        try:
+            r = http_session.get(API_URL.replace("/donnees", "/"), timeout=10)
+            st.write(f"Statut : {r.status_code}")
+            st.json(r.json())
+        except Exception as e:
+            st.error(f"Connexion échouée : {e}")
+            
+    if st.button("Inspecter Données (Debug)"):
+        try:
+            r = http_session.get(API_URL.replace("/donnees", "/debug"), timeout=10)
+            st.json(r.json())
+        except Exception as e:
+            st.error(f"Debug échoué : {e}")
 
 st.title("Dashboard météo PAD")
 

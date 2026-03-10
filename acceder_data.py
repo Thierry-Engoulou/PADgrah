@@ -28,13 +28,38 @@ def home():
 @app.route("/donnees", methods=["GET"])
 def get_donnees():
     station = request.args.get("station")
-    limit = int(request.args.get("limit", 20))
+    limit = int(request.args.get("limit", 100))
+    offset = int(request.args.get("offset", 0))
+    start_str = request.args.get("start")
+    end_str = request.args.get("end")
 
     query = {}
+    
     if station:
         query["Station"] = station
+    
+    if start_str or end_str:
+        date_query = {}
+        if start_str:
+            try:
+                # Expecting YYYY-MM-DD
+                start_dt = datetime.strptime(start_str, "%Y-%m-%d")
+                date_query["$gte"] = start_dt
+            except ValueError:
+                pass
+        
+        if end_str:
+            try:
+                # Include the whole end day
+                end_dt = datetime.strptime(end_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                date_query["$lte"] = end_dt
+            except ValueError:
+                pass
+        
+        if date_query:
+            query["DateTime"] = date_query
 
-    cursor = collection.find(query).sort("DateTime", -1).limit(limit)
+    cursor = collection.find(query).sort("DateTime", -1).skip(offset).limit(limit)
     donnees = []
     for doc in cursor:
         doc["_id"] = str(doc["_id"])
@@ -42,7 +67,13 @@ def get_donnees():
             doc["DateTime"] = doc["DateTime"].strftime("%Y-%m-%d %H:%M:%S")
         donnees.append(doc)
 
-    return jsonify(donnees)
+    total = collection.count_documents(query)
+
+    return jsonify({
+        "total": total,
+        "count": len(donnees),
+        "data": donnees
+    })
 
 # === Lancer l’API ===
 if __name__ == "__main__":

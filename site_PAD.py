@@ -14,6 +14,8 @@ import zipfile
 import time
 import concurrent.futures
 import pyarrow
+import xarray as xr
+import tempfile
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -422,6 +424,9 @@ with tab3:
         elif statut == "valide":
             st.success("✅ Accès débloqué par l'administrateur !")
             st.divider()
+            
+            format_choisi = st.radio("Format d'exportation", ["ZIP (CSV)", "NetCDF (.nc)"], horizontal=True)
+
             col1, col2 = st.columns(2)
 
             with col1:
@@ -433,12 +438,23 @@ with tab3:
                     sync_cache(s_dl, e_dl)
                     df = load_data(s_dl, e_dl)
                     if not df.empty:
-                        csv_buffer = io.StringIO()
-                        df.to_csv(csv_buffer, index=False)
-                        zip_buffer = io.BytesIO()
-                        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
-                            zf.writestr("meteo_export.csv", csv_buffer.getvalue())
-                        st.download_button("Télécharger ZIP", zip_buffer.getvalue(), "meteo.zip", "application/zip")
+                        if format_choisi == "ZIP (CSV)":
+                            csv_buffer = io.StringIO()
+                            df.to_csv(csv_buffer, index=False)
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
+                                zf.writestr("meteo_export.csv", csv_buffer.getvalue())
+                            st.download_button("Télécharger ZIP", zip_buffer.getvalue(), "meteo.zip", "application/zip")
+                        else:
+                            # Export NetCDF
+                            with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+                                ds = df.set_index(['DateTime', 'Station']).to_xarray()
+                                ds.attrs['title'] = 'Données Météo PAD'
+                                ds.to_netcdf(tmp.name, engine="h5netcdf")
+                                tmp_path = tmp.name
+                            with open(tmp_path, "rb") as f:
+                                st.download_button("Télécharger NetCDF (.nc)", f.read(), "meteo.nc", "application/x-netcdf")
+                            os.remove(tmp_path)
                     else:
                         st.warning("Aucune donnée")
 
@@ -448,12 +464,22 @@ with tab3:
                     sync_cache()
                     df = load_data()
                     if not df.empty:
-                        csv_buffer = io.StringIO()
-                        df.to_csv(csv_buffer, index=False)
-                        zip_buffer = io.BytesIO()
-                        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
-                            zf.writestr("meteo_full.csv", csv_buffer.getvalue())
-                        st.download_button("Télécharger TOUT (ZIP)", zip_buffer.getvalue(), "full_history.zip", "application/zip")
+                        if format_choisi == "ZIP (CSV)":
+                            csv_buffer = io.StringIO()
+                            df.to_csv(csv_buffer, index=False)
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
+                                zf.writestr("meteo_full.csv", csv_buffer.getvalue())
+                            st.download_button("Télécharger TOUT (ZIP)", zip_buffer.getvalue(), "full_history.zip", "application/zip")
+                        else:
+                            # Export NetCDF
+                            with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+                                ds = df.set_index(['DateTime', 'Station']).to_xarray()
+                                ds.to_netcdf(tmp.name, engine="h5netcdf")
+                                tmp_path = tmp.name
+                            with open(tmp_path, "rb") as f:
+                                st.download_button("Télécharger TOUT (NetCDF)", f.read(), "full_history.nc", "application/x-netcdf")
+                            os.remove(tmp_path)
 
 
 # ==========================================================

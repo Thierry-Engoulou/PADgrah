@@ -39,6 +39,18 @@ def debug():
         })
     return jsonify({"message": "Aucune donnée trouvée"})
 
+import numpy as np
+
+def scrub_nan(data):
+    """Remplace les valeurs NaN par None pour la compatibilité JSON."""
+    if isinstance(data, list):
+        return [scrub_nan(v) for v in data]
+    if isinstance(data, dict):
+        return {k: scrub_nan(v) for k, v in data.items()}
+    if isinstance(data, float) and np.isnan(data):
+        return None
+    return data
+
 # === Route pour accéder aux données ===
 @app.route("/donnees", methods=["GET"])
 def get_donnees():
@@ -48,62 +60,59 @@ def get_donnees():
     start_str = request.args.get("start")
     end_str = request.args.get("end")
 
-    query = {}
+    # On construit une liste de conditions pour $and
+    and_conditions = []
     
     if station:
-        # Robustness: look for either 'Station' or 'STATION NAME'
-        query["$or"] = [{"Station": station}, {"STATION NAME": station}]
+        and_conditions.append({
+            "$or": [{"Station": station}, {"STATION NAME": station}]
+        })
     
     if start_str or end_str:
         date_query = {}
         if start_str:
             try:
-                # Expecting YYYY-MM-DD
-                start_dt = datetime.strptime(start_str, "%Y-%m-%d")
-                date_query["$gte"] = start_dt
-            except ValueError:
-                pass
-        
+                date_query["$gte"] = datetime.strptime(start_str, "%Y-%m-%d")
+            except: pass
         if end_str:
             try:
-                # Include the whole end day
-                end_dt = datetime.strptime(end_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
-                date_query["$lte"] = end_dt
-            except ValueError:
-                pass
+                date_query["$lte"] = datetime.strptime(end_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            except: pass
         
         if date_query:
-            # On cherche soit en tant que Date, soit en tant que String (préfixe)
-            # MongoDB supporte le $or sur les mêmes champs
-            query["$and"] = query.get("$and", [])
-            query["$and"].append({
+            # On cherche soit en tant que Date, soit en tant que String
+            date_cond = {
                 "$or": [
                     {"DateTime": date_query},
-                    # Fallback si les dates sont stockées en String format "YYYY-MM-DD..."
-                    {"DateTime": {"$regex": f"^{start_str[:7]}"}} # On cherche au moins le même mois par défaut si start_str est présent
+                    # Si c'est stocké en string, on fait une comparaison directe (si format ISO)
+                    {"DateTime": {"$gte": start_str if start_str else "0000", "$lte": end_str if end_str else "9999"}}
                 ]
-            })
-            # Note: Si start_str est présent et que DateTime est un String, 
-            # la comparaison $gte/$lte directe fonctionne aussi si le format est ISO (YYYY-MM-DD)
-            if start_str:
-                query["$or"] = query.get("$or", [])
-                query["$or"].append({"DateTime": {"$gte": start_str}})
+            }
+            and_conditions.append(date_cond)
 
-    cursor = collection.find(query).sort("DateTime", -1).skip(offset).limit(limit)
-    donnees = []
-    for doc in cursor:
-        doc["_id"] = str(doc["_id"])
-        if "DateTime" in doc and isinstance(doc["DateTime"], datetime):
-            doc["DateTime"] = doc["DateTime"].strftime("%Y-%m-%d %H:%M:%S")
-        donnees.append(doc)
+    query = {"$and": and_conditions} if and_conditions else {}
 
-    total = collection.count_documents(query)
+    try:
+        cursor = collection.find(query).sort("DateTime", -1).skip(offset).limit(limit)
+        donnees = []
+        for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            if "DateTime" in doc and isinstance(doc["DateTime"], datetime):
+                doc["DateTime"] = doc["DateTime"].strftime("%Y-%m-%d %H:%M:%S")
+            donnees.append(doc)
 
-    return jsonify({
-        "total": total,
-        "count": len(donnees),
-        "data": donnees
-    })
+        total = collection.count_documents(query)
+        
+        # Scrub NaN values to prevent JSON errors
+        response_data = {
+            "total": total,
+            "count": len(donnees),
+            "data": donnees
+        }
+        return jsonify(scrub_nan(response_data))
+        
+    except Exception as e:
+        return jsonify({"error": str(e), "query": str(query)}), 500
 
 # === Lancer l’API ===
 if __name__ == "__main__":

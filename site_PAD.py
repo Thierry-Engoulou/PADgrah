@@ -205,12 +205,12 @@ def sync_cache(start=None, end=None):
     df_new = pd.DataFrame(data)
     df_new = normaliser_colonnes(df_new)
     
-    if not df_new.empty and \"DateTime\" in df_new.columns:
-        df_new[\"DateTime\"] = pd.to_datetime(df_new[\"DateTime\"])
+    if not df_new.empty and "DateTime" in df_new.columns:
+        df_new["DateTime"] = pd.to_datetime(df_new["DateTime"])
         
         # Diagnostic Preview
-        with st.expander(\"🔍 Aperçu des données récupérées\"):
-            st.write(f\"{len(df_new)} nouvelles lignes détectées\")
+        with st.expander("🔍 Aperçu des données récupérées"):
+            st.write(f"{len(df_new)} nouvelles lignes détectées")
             st.dataframe(df_new.head())
 
     if os.path.exists(PARQUET_CACHE):

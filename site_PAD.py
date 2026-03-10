@@ -169,19 +169,14 @@ def fetch_all_data(start=None, end=None):
         for attempt in range(5):
             try:
                 r = http_session.get(API_URL, params=params, timeout=30)
-                # Utiliser session state pour logger l'URL pour le debug
-                if 'last_urls' not in st.session_state: st.session_state.last_urls = []
-                st.session_state.last_urls.append(r.url)
-
                 if r.status_code == 200:
                     resp = r.json()
                     data = resp.get("data", []) if isinstance(resp, dict) else resp
                     return data
                 else:
-                    st.sidebar.error(f"Erreur API ({r.status_code}) : {r.text[:100]}")
+                    st.sidebar.error(f"Erreur API ({r.status_code})")
                 time.sleep(1)
-            except Exception as e:
-                st.sidebar.warning(f"Note : Tentative {attempt+1} échouée pour {w_start}")
+            except Exception:
                 time.sleep(1)
         return []
 
@@ -214,11 +209,6 @@ def sync_cache(start=None, end=None):
     
     if not df_new.empty and "DateTime" in df_new.columns:
         df_new["DateTime"] = pd.to_datetime(df_new["DateTime"])
-        
-        # Diagnostic Preview
-        with st.expander("🔍 Aperçu des données récupérées"):
-            st.write(f"{len(df_new)} nouvelles lignes détectées")
-            st.dataframe(df_new.head())
 
     if os.path.exists(PARQUET_CACHE):
         try:
@@ -368,45 +358,6 @@ def afficher_graphes(df):
 # ==========================================================
 # INTERFACE
 # ==========================================================
-
-# ==========================================================
-# SIDEBAR DEBUG SCIENTIFIQUE
-# ==========================================================
-
-with st.sidebar:
-    st.divider()
-    st.subheader("🧪 Mode Science Debug")
-    if st.button("Vérifier Connexion API"):
-        try:
-            r = http_session.get(API_URL.replace("/donnees", "/"), timeout=10)
-            st.write(f"Statut : {r.status_code}")
-            st.json(r.json())
-        except Exception as e:
-            st.error(f"Connexion échouée : {e}")
-            
-    if st.button("Inspecter Données (Debug)"):
-        try:
-            r = http_session.get(API_URL.replace("/donnees", "/debug"), timeout=10)
-            st.json(r.json())
-        except Exception as e:
-            st.error(f"Debug échoué : {e}")
-
-    st.divider()
-    st.write("Dernières URLs appelées :")
-    if 'last_urls' in st.session_state:
-        for u in st.session_state.last_urls[-3:]:
-            st.code(u)
-
-    st.write("---")
-    st.subheader("🛠 Test Manuel")
-    t_start = st.text_input("Start (YYYY-MM-DD)", "2026-03-01")
-    t_end = st.text_input("End (YYYY-MM-DD)", "2026-03-10")
-    if st.button("Tester API manuellement"):
-        test_url = f"{API_URL}?start={t_start}&end={t_end}&limit=5"
-        st.code(test_url)
-        r = http_session.get(test_url)
-        st.write(f"Status: {r.status_code}")
-        st.json(r.json())
 
 st.title("Dashboard météo PAD")
 

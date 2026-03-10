@@ -21,23 +21,8 @@ app = Flask(__name__)
 def home():
     return jsonify({
         "message": "✅ API Météo Douala opérationnelle",
-        "endpoints": ["/donnees", "/donnees?station=SM 2", "/donnees?limit=10", "/debug"]
+        "endpoints": ["/donnees", "/donnees?station=SM 2", "/donnees?limit=10"]
     })
-
-# === Route Debug Scientifique ===
-@app.route("/debug")
-def debug():
-    doc = collection.find_one()
-    if doc:
-        doc["_id"] = str(doc["_id"])
-        # Vérifier le type de DateTime
-        dt_val = doc.get("DateTime")
-        return jsonify({
-            "sample_doc": doc,
-            "datetime_type": str(type(dt_val)),
-            "keys": list(doc.keys())
-        })
-    return jsonify({"message": "Aucune donnée trouvée"})
 
 import numpy as np
 

@@ -171,8 +171,10 @@ def fetch_all_data(start=None, end=None):
                 r = http_session.get(API_URL, params=params, timeout=30)
                 if r.status_code == 200:
                     resp = r.json()
-                    data = resp.get("data", []) if isinstance(resp, dict) else resp
-                    return data
+                    # Parsing résilient : liste directe ou dictionnaire avec clé 'data'
+                    if isinstance(resp, list):
+                        return resp
+                    return resp.get("data", []) if isinstance(resp, dict) else []
                 else:
                     st.sidebar.error(f"Erreur API ({r.status_code})")
                 time.sleep(1)
@@ -250,6 +252,11 @@ def load_data(start=None, end=None):
 
     df = normaliser_colonnes(df)
     df["DateTime"] = pd.to_datetime(df["DateTime"])
+    
+    # === Diagnostic Scientifique (User Tip) ===
+    if not df.empty:
+        st.sidebar.info(f"📅 Base locale : {df['DateTime'].min().strftime('%Y-%m-%d')} au {df['DateTime'].max().strftime('%Y-%m-%d')}")
+    
     df = appliquer_filtres_scientifiques(df)
 
     if start and end:
@@ -262,11 +269,17 @@ def load_data(start=None, end=None):
             sync_cache(start, end)
             try:
                 df = pd.read_parquet(PARQUET_CACHE)
+                df = normaliser_colonnes(df)
                 df["DateTime"] = pd.to_datetime(df["DateTime"])
                 mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
             except Exception:
                 pass
-        df = df[mask]
+        
+        # === Filtrage Robuste (User Tip) ===
+        if len(df[mask]) == 0:
+            st.warning(f"⚠️ Aucune donnée entre {start} et {end}. Affichage des dernières données disponibles.")
+        else:
+            df = df[mask]
 
     # Conversion numérique scientifique optimisée
     cols = ["TIDE HEIGHT", "WIND SPEED", "WIND DIR", "AIR PRESSURE", "AIR TEMPERATURE", "DEWPOINT", "HUMIDITY"]
@@ -378,7 +391,9 @@ with tab1:
         end = datetime.today()
         start = end - timedelta(days=7)
         df = load_data(start, end)
-        st.write(len(df), "lignes")
+        st.success(f"✅ {len(df)} lignes chargées")
+        with st.expander("🔍 Aperçu technique des données"):
+            st.dataframe(df.head(10))
         afficher_graphes(df)
 
 
@@ -393,7 +408,9 @@ with tab2:
 
     if st.button("Charger période"):
         df = load_data(start, end)
-        st.write(len(df), "lignes")
+        st.success(f"✅ {len(df)} lignes chargées")
+        with st.expander("🔍 Aperçu technique des données"):
+            st.dataframe(df.head(10))
         afficher_graphes(df)
 
 

@@ -166,23 +166,23 @@ def fetch_all_data(start=None, end=None):
         w_end = weeks[i + 1].strftime("%Y-%m-%d")
         params = {"limit": 20000, "start": w_start, "end": w_end}
         
-        for attempt in range(5): # 5 tentatives max
+        for attempt in range(5):
             try:
-                # Utilisation de la session globale ( pooling )
                 r = http_session.get(API_URL, params=params, timeout=30)
+                # Utiliser session state pour logger l'URL pour le debug
+                if 'last_urls' not in st.session_state: st.session_state.last_urls = []
+                st.session_state.last_urls.append(r.url)
+
                 if r.status_code == 200:
                     resp = r.json()
                     data = resp.get("data", []) if isinstance(resp, dict) else resp
-                    if not data and attempt < 2:
-                        time.sleep(1)
-                        continue
                     return data
                 else:
                     st.sidebar.error(f"Erreur API ({r.status_code}) : {r.text[:100]}")
                 time.sleep(1)
             except Exception as e:
-                st.sidebar.warning(f"Erreur tentative {attempt+1} : {e}")
-                time.sleep(2)
+                st.sidebar.warning(f"Note : Tentative {attempt+1} échouée pour {w_start}")
+                time.sleep(1)
         return []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -390,6 +390,23 @@ with st.sidebar:
             st.json(r.json())
         except Exception as e:
             st.error(f"Debug échoué : {e}")
+
+    st.divider()
+    st.write("Dernières URLs appelées :")
+    if 'last_urls' in st.session_state:
+        for u in st.session_state.last_urls[-3:]:
+            st.code(u)
+
+    st.write("---")
+    st.subheader("🛠 Test Manuel")
+    t_start = st.text_input("Start (YYYY-MM-DD)", "2026-03-01")
+    t_end = st.text_input("End (YYYY-MM-DD)", "2026-03-10")
+    if st.button("Tester API manuellement"):
+        test_url = f"{API_URL}?start={t_start}&end={t_end}&limit=5"
+        st.code(test_url)
+        r = http_session.get(test_url)
+        st.write(f"Status: {r.status_code}")
+        st.json(r.json())
 
 st.title("Dashboard météo PAD")
 

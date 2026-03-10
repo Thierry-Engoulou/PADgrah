@@ -91,6 +91,23 @@ def envoyer_email(dest, sujet, contenu):
 # FILTRES ET MODELES SCIENTIFIQUES
 # ==========================================================
 
+def normaliser_colonnes(df):
+    """Standardise les noms de colonnes pour éviter les KeyError."""
+    if df.empty:
+        return df
+    mapping = {
+        "STATION NAME": "Station",
+        "TIDE_HEIGHT": "TIDE HEIGHT",
+        "WIND_SPEED": "WIND SPEED",
+        "WIND_DIR": "WIND DIR",
+        "AIR_PRESSURE": "AIR PRESSURE",
+        "AIR_TEMPERATURE": "AIR TEMPERATURE",
+        "HUMIDITY_RELATIVE": "HUMIDITY"
+    }
+    df = df.rename(columns=mapping)
+    return df
+
+
 def appliquer_filtres_scientifiques(df):
     """Supprime les valeurs aberrantes (outliers) via la méthode IQR."""
     df = df.copy()
@@ -186,8 +203,15 @@ def sync_cache(start=None, end=None):
         return
     
     df_new = pd.DataFrame(data)
-    if not df_new.empty and "DateTime" in df_new.columns:
-        df_new["DateTime"] = pd.to_datetime(df_new["DateTime"])
+    df_new = normaliser_colonnes(df_new)
+    
+    if not df_new.empty and \"DateTime\" in df_new.columns:
+        df_new[\"DateTime\"] = pd.to_datetime(df_new[\"DateTime\"])
+        
+        # Diagnostic Preview
+        with st.expander(\"🔍 Aperçu des données récupérées\"):
+            st.write(f\"{len(df_new)} nouvelles lignes détectées\")
+            st.dataframe(df_new.head())
 
     if os.path.exists(PARQUET_CACHE):
         try:
@@ -227,6 +251,7 @@ def load_data(start=None, end=None):
         except Exception:
             return pd.DataFrame()
 
+    df = normaliser_colonnes(df)
     df["DateTime"] = pd.to_datetime(df["DateTime"])
     df = appliquer_filtres_scientifiques(df)
 

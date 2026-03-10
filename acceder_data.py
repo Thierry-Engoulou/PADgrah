@@ -36,7 +36,8 @@ def get_donnees():
     query = {}
     
     if station:
-        query["Station"] = station
+        # Robustness: look for either 'Station' or 'STATION NAME'
+        query["$or"] = [{"Station": station}, {"STATION NAME": station}]
     
     if start_str or end_str:
         date_query = {}

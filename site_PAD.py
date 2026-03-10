@@ -191,10 +191,17 @@ def sync_cache(start=None, end=None):
 # ==========================================================
 
 def load_data(start=None, end=None):
-    if not os.path.exists(CSV_CACHE):
+    # Télécharge si le fichier est absent ou vide
+    if not os.path.exists(CSV_CACHE) or os.path.getsize(CSV_CACHE) == 0:
         sync_cache(start, end)
 
-    df = pd.read_csv(CSV_CACHE)
+    try:
+        df = pd.read_csv(CSV_CACHE)
+    except pd.errors.EmptyDataError:
+        st.warning("Cache vide, téléchargement en cours...")
+        sync_cache(start, end)
+        df = pd.read_csv(CSV_CACHE)
+
     df["DateTime"] = pd.to_datetime(df["DateTime"])
     df = appliquer_filtres_scientifiques(df)
 
@@ -204,7 +211,10 @@ def load_data(start=None, end=None):
         mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
         if len(df[mask]) < 10:
             sync_cache(start, end)
-            df = pd.read_csv(CSV_CACHE)
+            try:
+                df = pd.read_csv(CSV_CACHE)
+            except pd.errors.EmptyDataError:
+                return pd.DataFrame()
             df["DateTime"] = pd.to_datetime(df["DateTime"])
             mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
         df = df[mask]

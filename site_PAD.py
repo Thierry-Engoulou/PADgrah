@@ -13,6 +13,7 @@ import io
 import zipfile
 import time
 import concurrent.futures
+import pyarrow
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -26,9 +27,12 @@ st.set_page_config(
     layout="wide"
 )
 
-CSV_CACHE = "valide.csv"
+PARQUET_CACHE = "valide.parquet"
 API_URL = "https://data-real-time-2.onrender.com/donnees"
 BATCH_SIZE = 10000
+
+# Session HTTP globale pour le pooling de connexions
+http_session = requests.Session()
 
 
 # ==========================================================
@@ -127,13 +131,14 @@ def fetch_all_data(start=None, end=None):
     d_start = pd.to_datetime(start) if start else pd.to_datetime("2024-01-01")
     d_end = pd.to_datetime(end) if end else datetime.today()
 
+    # Découpage intelligent par semaines
     weeks = pd.date_range(start=d_start, end=d_end, freq="7D").tolist()
     if not weeks or weeks[-1] < d_end:
         weeks.append(d_end)
 
     all_data = []
-    progress = st.progress(0)
-    txt = st.empty()
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
     total_steps = max(len(weeks) - 1, 1)
 
@@ -141,25 +146,30 @@ def fetch_all_data(start=None, end=None):
         w_start = weeks[i].strftime("%Y-%m-%d")
         w_end = weeks[i + 1].strftime("%Y-%m-%d")
         params = {"limit": 20000, "start": w_start, "end": w_end}
-        while True:
+        
+        for attempt in range(5): # 5 tentatives max
             try:
-                r = requests.get(API_URL, params=params, timeout=60)
+                # Utilisation de la session globale ( pooling )
+                r = http_session.get(API_URL, params=params, timeout=30)
                 if r.status_code == 200:
                     resp = r.json()
                     return resp.get("data", []) if isinstance(resp, dict) else resp
-                time.sleep(2)
+                time.sleep(1)
             except Exception:
                 time.sleep(2)
+        return []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(fetch_week, i): i for i in range(total_steps)}
         for count, future in enumerate(concurrent.futures.as_completed(futures)):
-            all_data.extend(future.result())
-            progress.progress(min((count + 1) / total_steps, 1.0))
-            txt.text(f"⚡ Vitesse Éclair : {count + 1}/{total_steps} blocs ({len(all_data)} lignes)")
+            res = future.result()
+            if res:
+                all_data.extend(res)
+            progress_bar.progress(min((count + 1) / total_steps, 1.0))
+            status_text.text(f"⚡ Vitesse Éclair : {count + 1}/{total_steps} blocs ({len(all_data)} lignes)")
 
-    progress.empty()
-    txt.empty()
+    progress_bar.empty()
+    status_text.empty()
     return all_data
 
 
@@ -170,19 +180,29 @@ def fetch_all_data(start=None, end=None):
 def sync_cache(start=None, end=None):
     data = fetch_all_data(start, end)
     if not data:
-        st.warning("Aucune donnée récupérée.")
+        st.info("Aucune nouvelle donnée trouvée pour cette période.")
         return
+    
     df_new = pd.DataFrame(data)
-    if os.path.exists(CSV_CACHE):
-        df_old = pd.read_csv(CSV_CACHE)
-        df_combined = pd.concat([df_old, df_new], ignore_index=True)
-        if "DateTime" in df_combined.columns:
-            df_combined["DateTime"] = pd.to_datetime(df_combined["DateTime"])
-            df_combined.drop_duplicates(subset=["DateTime", "Station"], inplace=True)
-            df_combined.sort_values("DateTime", inplace=True)
+    if not df_new.empty and "DateTime" in df_new.columns:
+        df_new["DateTime"] = pd.to_datetime(df_new["DateTime"])
+
+    if os.path.exists(PARQUET_CACHE):
+        try:
+            df_old = pd.read_parquet(PARQUET_CACHE)
+            df_old["DateTime"] = pd.to_datetime(df_old["DateTime"])
+            df_combined = pd.concat([df_old, df_new], ignore_index=True)
+        except Exception:
+            df_combined = df_new
     else:
         df_combined = df_new
-    df_combined.to_csv(CSV_CACHE, index=False)
+
+    if not df_combined.empty and "DateTime" in df_combined.columns:
+        df_combined.drop_duplicates(subset=["DateTime", "Station"], inplace=True)
+        df_combined.sort_values("DateTime", inplace=True)
+        # Écriture Parquet ultra-rapide
+        df_combined.to_parquet(PARQUET_CACHE, index=False, engine="pyarrow")
+    
     st.cache_data.clear()
 
 
@@ -191,16 +211,19 @@ def sync_cache(start=None, end=None):
 # ==========================================================
 
 def load_data(start=None, end=None):
-    # Télécharge si le fichier est absent ou vide
-    if not os.path.exists(CSV_CACHE) or os.path.getsize(CSV_CACHE) == 0:
+    # Si le cache Parquet n'existe pas, on synchronise la période demandée
+    if not os.path.exists(PARQUET_CACHE) or os.path.getsize(PARQUET_CACHE) == 0:
         sync_cache(start, end)
 
     try:
-        df = pd.read_csv(CSV_CACHE)
-    except pd.errors.EmptyDataError:
-        st.warning("Cache vide, téléchargement en cours...")
+        df = pd.read_parquet(PARQUET_CACHE)
+    except Exception:
+        st.warning("Initialisation de la base de données locale...")
         sync_cache(start, end)
-        df = pd.read_csv(CSV_CACHE)
+        try:
+            df = pd.read_parquet(PARQUET_CACHE)
+        except Exception:
+            return pd.DataFrame()
 
     df["DateTime"] = pd.to_datetime(df["DateTime"])
     df = appliquer_filtres_scientifiques(df)
@@ -209,16 +232,19 @@ def load_data(start=None, end=None):
         s_dt = pd.to_datetime(start)
         e_dt = pd.to_datetime(end)
         mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
-        if len(df[mask]) < 10:
+        
+        # Si on n'a presque pas de données pour la plage demandée, on force une sync
+        if len(df[mask]) < 5:
             sync_cache(start, end)
             try:
-                df = pd.read_csv(CSV_CACHE)
-            except pd.errors.EmptyDataError:
-                return pd.DataFrame()
-            df["DateTime"] = pd.to_datetime(df["DateTime"])
-            mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
+                df = pd.read_parquet(PARQUET_CACHE)
+                df["DateTime"] = pd.to_datetime(df["DateTime"])
+                mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
+            except Exception:
+                pass
         df = df[mask]
 
+    # Conversion numérique scientifique optimisée
     cols = ["TIDE HEIGHT", "WIND SPEED", "WIND DIR", "AIR PRESSURE", "AIR TEMPERATURE", "DEWPOINT", "HUMIDITY"]
     for c in cols:
         if c in df.columns:

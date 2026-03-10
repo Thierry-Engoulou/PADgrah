@@ -1,8 +1,5 @@
-uvicorn
-streamlit==1.45.1
-pandas
-requests
-plotly
-folium
-streamlit-folium
-gunicorn
+flask==3.0.0
+pymongo==4.4.0
+python-dotenv==1.0.1
+certifi==2025.1.31
+gunicorn==21.2.0

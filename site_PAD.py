@@ -1,211 +1,492 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import requests
 import plotly.graph_objects as go
 import sqlite3
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
+import uuid
+import os
+import requests
+import smtplib
+import io
+import zipfile
+import time
+import concurrent.futures
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# --- Connexion SQLite ---
+
+# ==========================================================
+# CONFIG
+# ==========================================================
+
+st.set_page_config(
+    page_title="Météo Douala",
+    layout="wide"
+)
+
+CSV_CACHE = "valide.csv"
+API_URL = "https://data-real-time-2.onrender.com/donnees"
+BATCH_SIZE = 10000
+
+
+# ==========================================================
+# SQLITE
+# ==========================================================
+
 conn = sqlite3.connect("demandes.db", check_same_thread=False)
 cursor = conn.cursor()
-cursor.execute('''
+
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS demandes (
-    id TEXT PRIMARY KEY,
-    nom TEXT,
-    structure TEXT,
-    email TEXT,
-    raison TEXT,
-    statut TEXT,
-    token TEXT,
-    timestamp REAL
+id TEXT PRIMARY KEY,
+nom TEXT,
+structure TEXT,
+email TEXT,
+raison TEXT,
+statut TEXT,
+token TEXT,
+timestamp REAL
 )
-''')
+""")
 conn.commit()
 
-# --- Page Streamlit ---
-st.set_page_config(page_title="Météo Douala", layout="wide")
-st.title("Visualisation des données 📊📈")
 
-API_URL = "https://data-real-time-2.onrender.com/donnees"
+# ==========================================================
+# EMAIL
+# ==========================================================
 
-# --- Fonction récupération par batch ---
-@st.cache_data(ttl=600)
-def load_all_data(batch_limit=2000):
+def envoyer_email(dest, sujet, contenu):
+    if isinstance(dest, str):
+        dest_list = [dest]
+    else:
+        dest_list = dest
+
+    expediteur = "engoulouthierry62@gmail.com"
+    mot_de_passe = "tfzybsaqrlyntkox"
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = sujet
+    msg["From"] = expediteur
+    msg["To"] = ", ".join(dest_list)
+    msg.attach(MIMEText(contenu, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(expediteur, mot_de_passe)
+            for d in dest_list:
+                s.sendmail(expediteur, d, msg.as_string())
+    except Exception as e:
+        st.error(f"Erreur Email : {e}")
+
+
+# ==========================================================
+# FILTRES ET MODELES SCIENTIFIQUES
+# ==========================================================
+
+def appliquer_filtres_scientifiques(df):
+    """Supprime les valeurs aberrantes (outliers) via la méthode IQR."""
+    df = df.copy()
+    params = ["TIDE HEIGHT", "WIND SPEED", "AIR PRESSURE", "AIR TEMPERATURE", "DEWPOINT", "HUMIDITY"]
+    for p in params:
+        if p in df.columns:
+            temp = df[p].dropna()
+            if not temp.empty:
+                Q1 = temp.quantile(0.25)
+                Q3 = temp.quantile(0.75)
+                IQR = Q3 - Q1
+                lower = Q1 - 2.5 * IQR
+                upper = Q3 + 2.5 * IQR
+                df.loc[(df[p] < lower) | (df[p] > upper), p] = np.nan
+            df[p] = df[p].interpolate(method="linear")
+    return df
+
+
+def calculer_modele_harmonique(df, station):
+    """Génère une courbe sinusoïdale pure basée sur les données réelles."""
+    df_st = df[df["Station"] == station].dropna(subset=["TIDE HEIGHT"])
+    if len(df_st) < 10:
+        return None
+    t0 = df_st["DateTime"].min()
+    t = (df_st["DateTime"] - t0).dt.total_seconds() / 3600.0
+    h = df_st["TIDE HEIGHT"].values
+    omega = 2 * np.pi / 12.4206
+    X = np.column_stack([np.ones(len(t)), np.cos(omega * t), np.sin(omega * t)])
+    coeffs, _, _, _ = np.linalg.lstsq(X, h, rcond=None)
+    h0, A, B = coeffs
+    t_full = (df["DateTime"] - t0).dt.total_seconds() / 3600.0
+    return h0 + A * np.cos(omega * t_full) + B * np.sin(omega * t_full)
+
+
+# ==========================================================
+# TELECHARGEMENT API VITE ECLAIR (PARALLELE)
+# ==========================================================
+
+def fetch_all_data(start=None, end=None):
+    d_start = pd.to_datetime(start) if start else pd.to_datetime("2024-01-01")
+    d_end = pd.to_datetime(end) if end else datetime.today()
+
+    weeks = pd.date_range(start=d_start, end=d_end, freq="7D").tolist()
+    if not weeks or weeks[-1] < d_end:
+        weeks.append(d_end)
+
     all_data = []
-    offset = 0
-
     progress = st.progress(0)
-    status = st.empty()
+    txt = st.empty()
 
-    while True:
-        url = f"{API_URL}?limit={batch_limit}&offset={offset}"
-        try:
-            r = requests.get(url, timeout=30)
-            r.raise_for_status()
-            data = r.json()
-        except Exception as e:
-            st.error(f"Erreur API : {e}")
-            break
+    total_steps = max(len(weeks) - 1, 1)
 
-        if not data:
-            break
+    def fetch_week(i):
+        w_start = weeks[i].strftime("%Y-%m-%d")
+        w_end = weeks[i + 1].strftime("%Y-%m-%d")
+        params = {"limit": 20000, "start": w_start, "end": w_end}
+        while True:
+            try:
+                r = requests.get(API_URL, params=params, timeout=60)
+                if r.status_code == 200:
+                    resp = r.json()
+                    return resp.get("data", []) if isinstance(resp, dict) else resp
+                time.sleep(2)
+            except Exception:
+                time.sleep(2)
 
-        all_data.extend(data)
-        offset += batch_limit
-        status.text(f"Chargement {len(all_data)} lignes...")
-        progress.progress(min(len(all_data)/200000,1.0))
-
-        if len(data) < batch_limit:
-            break
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(fetch_week, i): i for i in range(total_steps)}
+        for count, future in enumerate(concurrent.futures.as_completed(futures)):
+            all_data.extend(future.result())
+            progress.progress(min((count + 1) / total_steps, 1.0))
+            txt.text(f"⚡ Vitesse Éclair : {count + 1}/{total_steps} blocs ({len(all_data)} lignes)")
 
     progress.empty()
-    status.empty()
+    txt.empty()
+    return all_data
 
-    if not all_data:
-        return pd.DataFrame()
 
-    return pd.DataFrame(all_data)
+# ==========================================================
+# SYNC CACHE
+# ==========================================================
 
-# --- Bouton chargement ---
-if "df" not in st.session_state:
-    st.info("Clique sur le bouton pour charger les données.")
-    if st.button("🚀 Charger les données"):
-        st.session_state.df = load_all_data()
-    st.stop()
+def sync_cache(start=None, end=None):
+    data = fetch_all_data(start, end)
+    if not data:
+        st.warning("Aucune donnée récupérée.")
+        return
+    df_new = pd.DataFrame(data)
+    if os.path.exists(CSV_CACHE):
+        df_old = pd.read_csv(CSV_CACHE)
+        df_combined = pd.concat([df_old, df_new], ignore_index=True)
+        if "DateTime" in df_combined.columns:
+            df_combined["DateTime"] = pd.to_datetime(df_combined["DateTime"])
+            df_combined.drop_duplicates(subset=["DateTime", "Station"], inplace=True)
+            df_combined.sort_values("DateTime", inplace=True)
+    else:
+        df_combined = df_new
+    df_combined.to_csv(CSV_CACHE, index=False)
+    st.cache_data.clear()
 
-df = st.session_state.df
 
-# --- Nettoyage données ---
-df["DateTime"] = pd.to_datetime(df["DateTime"])
-df = df.sort_values("DateTime", ascending=False)
+# ==========================================================
+# CHARGEMENT DES DONNEES
+# ==========================================================
 
-params = [
-"TIDE HEIGHT",
-"WIND SPEED",
-"WIND DIR",
-"AIR PRESSURE",
-"AIR TEMPERATURE",
-"DEWPOINT",
-"HUMIDITY"
-]
+def load_data(start=None, end=None):
+    if not os.path.exists(CSV_CACHE):
+        sync_cache(start, end)
 
-for p in params:
-    df[p] = pd.to_numeric(df[p], errors="coerce")
+    df = pd.read_csv(CSV_CACHE)
+    df["DateTime"] = pd.to_datetime(df["DateTime"])
+    df = appliquer_filtres_scientifiques(df)
 
-bool_columns = ["TIDE_HIGH", "TIDE_LOW"]
-for col in bool_columns:
-    df[col] = df[col].replace({False: np.nan, True: 1})
+    if start and end:
+        s_dt = pd.to_datetime(start)
+        e_dt = pd.to_datetime(end)
+        mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
+        if len(df[mask]) < 10:
+            sync_cache(start, end)
+            df = pd.read_csv(CSV_CACHE)
+            df["DateTime"] = pd.to_datetime(df["DateTime"])
+            mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
+        df = df[mask]
 
-# --- Filtre date ---
-st.sidebar.header("🗓️ Filtrer par date")
-min_date = df["DateTime"].min().date()
-max_date = df["DateTime"].max().date()
+    cols = ["TIDE HEIGHT", "WIND SPEED", "WIND DIR", "AIR PRESSURE", "AIR TEMPERATURE", "DEWPOINT", "HUMIDITY"]
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
-start_date, end_date = st.sidebar.date_input(
-    "Plage de dates",
-    [min_date, max_date]
-)
+    df.sort_values("DateTime", inplace=True)
+    return df
 
-df = df[
-    (df["DateTime"].dt.date >= start_date) &
-    (df["DateTime"].dt.date <= end_date)
-]
 
-# --- Slider lissage ---
-window_size = st.sidebar.slider(
-    "Taille fenêtre lissage",
-    1,21,5,step=2
-)
+# ==========================================================
+# DOWNSAMPLING
+# ==========================================================
 
-# --- Fonction échantillonnage désactivée ---
-def sample_data(df, max_points=500_000):
-    return df  # ne fait plus d'échantillonnage
+def downsample(df, max_points=2000):
+    if len(df) <= max_points:
+        return df
+    step = len(df) // max_points
+    return df.iloc[::step]
 
-# --- Onglets ---
-tab1, tab2 = st.tabs([
-    "🗓️ 30 derniers jours",
-    "📅 Période personnalisée"
+
+# ==========================================================
+# GRAPHES
+# ==========================================================
+
+params_list = ["TIDE HEIGHT", "WIND SPEED", "WIND DIR", "AIR PRESSURE", "AIR TEMPERATURE", "DEWPOINT", "HUMIDITY"]
+
+STATION_COLORS = {
+    "SM 2": "blue",
+    "SM 3": "crimson",
+    "SM 4": "green",
+}
+
+
+def afficher_graphes(df):
+    if df.empty:
+        st.warning("Aucune donnée")
+        return
+
+    window = st.sidebar.slider("Lissage", 1, 51, 5)
+    no_downsample = st.sidebar.checkbox("Désactiver échantillonnage")
+
+    for p in params_list:
+        if p not in df.columns:
+            continue
+
+        fig = go.Figure()
+
+        for station in df["Station"].unique():
+            d = df[df["Station"] == station].copy()
+            if not no_downsample:
+                d = downsample(d, 2000)
+
+            color = STATION_COLORS.get(station, "orange")
+
+            if p == "TIDE HEIGHT":
+                h_harmonic = calculer_modele_harmonique(d, station)
+                if h_harmonic is not None:
+                    fig.add_trace(go.Scattergl(
+                        x=d["DateTime"], y=h_harmonic,
+                        name=f"{station} (Modèle)",
+                        line=dict(width=3, color=color),
+                        mode="lines"
+                    ))
+                fig.add_trace(go.Scattergl(
+                    x=d["DateTime"], y=d[p],
+                    name=f"{station} (Données)",
+                    mode="markers",
+                    marker=dict(size=4, opacity=0.4, color=color)
+                ))
+            else:
+                d["display"] = d[p].rolling(window, center=True, min_periods=1).mean()
+                fig.add_trace(go.Scattergl(
+                    x=d["DateTime"], y=d["display"],
+                    name=station,
+                    line=dict(color=color),
+                    mode="lines" if not no_downsample else "lines+markers"
+                ))
+
+        fig.update_layout(
+            title=p,
+            hovermode="x unified",
+            template="plotly_dark" if p == "TIDE HEIGHT" else "plotly_white"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
+# ==========================================================
+# INTERFACE
+# ==========================================================
+
+st.title("Dashboard météo PAD")
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "7 jours",
+    "Période personnalisée",
+    "Télécharger",
+    "Administration 🔐"
 ])
 
-# --- 30 derniers jours ---
+
+# ==========================================================
+# TAB 1
+# ==========================================================
+
 with tab1:
-    df_last_30 = df[
-        df["DateTime"] >= (df["DateTime"].max()-pd.Timedelta(days=30))
-    ].copy()
+    if st.button("Charger données (7 derniers jours)"):
+        end = datetime.today()
+        start = end - timedelta(days=7)
+        df = load_data(start, end)
+        st.write(len(df), "lignes")
+        afficher_graphes(df)
 
-    for p in params:
-        df_plot = df_last_30.dropna(subset=[p])
-        if not df_plot.empty:
-            df_plot[p+"_smooth"] = df_plot[p].rolling(
-                window=window_size,
-                min_periods=1,
-                center=True
-            ).mean()
 
-            df_plot = sample_data(df_plot)
+# ==========================================================
+# TAB 2
+# ==========================================================
 
-            # --- Graphiques avec Scattergl ---
-            fig = go.Figure()
-            for station in df_plot["Station"].unique():
-                df_s = df_plot[df_plot["Station"] == station]
-                fig.add_trace(go.Scattergl(
-                    x=df_s["DateTime"],
-                    y=df_s[p+"_smooth"],
-                    mode="lines",
-                    name=station
-                ))
-            fig.update_layout(title=f"{p} (30 derniers jours)")
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info(f"Aucune donnée pour {p}")
-
-# --- Période personnalisée ---
 with tab2:
-    start_custom, end_custom = st.date_input(
-        "Période",
-        [min_date, max_date],
-        key="custom"
-    )
+    col1, col2 = st.columns(2)
+    start = col1.date_input("Début", datetime.today() - timedelta(days=30))
+    end = col2.date_input("Fin", datetime.today())
 
-    df_custom = df[
-        (df["DateTime"].dt.date >= start_custom) &
-        (df["DateTime"].dt.date <= end_custom)
-    ].copy()
+    if st.button("Charger période"):
+        df = load_data(start, end)
+        st.write(len(df), "lignes")
+        afficher_graphes(df)
 
-    for p in params:
-        df_plot = df_custom.dropna(subset=[p])
-        if not df_plot.empty:
-            df_plot[p+"_smooth"] = df_plot[p].rolling(
-                window=window_size,
-                min_periods=1,
-                center=True
-            ).mean()
 
-            df_plot = sample_data(df_plot)
+# ==========================================================
+# TAB 3 — TELECHARGEMENT AVEC VALIDATION ADMIN
+# ==========================================================
 
-            # --- Graphiques avec Scattergl ---
-            fig = go.Figure()
-            for station in df_plot["Station"].unique():
-                df_s = df_plot[df_plot["Station"] == station]
-                fig.add_trace(go.Scattergl(
-                    x=df_s["DateTime"],
-                    y=df_s[p+"_smooth"],
-                    mode="lines",
-                    name=station
-                ))
-            fig.update_layout(title=f"{p} ({start_custom} → {end_custom})")
-            st.plotly_chart(fig, use_container_width=True)
+with tab3:
+    st.subheader("Demande d'accès aux données")
+
+    if "req_id" not in st.session_state:
+        st.session_state.req_id = None
+
+    if not st.session_state.req_id:
+        with st.form("request_form"):
+            st.info("Formulaire de demande d'accès — Validation administrateur requise")
+            nom = st.text_input("Nom / Institution")
+            email_user = st.text_input("Votre Email")
+            raison = st.text_area("Motif de l'utilisation")
+            submit = st.form_submit_button("Envoyer la demande")
+
+            if submit and nom and email_user and raison:
+                req_id = str(uuid.uuid4())[:8]
+                cursor.execute("INSERT INTO demandes VALUES (?,?,?,?,?,?,?,?)",
+                               (req_id, nom, "", email_user, raison, "en_attente", "", time.time()))
+                conn.commit()
+                envoyer_email(
+                    "engoulouthierry62@gmail.com",
+                    f"DEMANDE PAD - {nom} [{req_id}]",
+                    f"<b>ID:</b> {req_id}<br><b>Nom:</b> {nom}<br><b>Email:</b> {email_user}<br><b>Motif:</b> {raison}"
+                )
+                st.session_state.req_id = req_id
+                st.success("Demande envoyée ! L'administrateur examinera votre demande et vous recevrez un email.")
+                st.rerun()
+
+    else:
+        cursor.execute("SELECT statut FROM demandes WHERE id=?", (st.session_state.req_id,))
+        row = cursor.fetchone()
+        statut = row[0] if row else "inconnu"
+
+        if statut == "en_attente":
+            st.warning(f"🕒 Votre demande ({st.session_state.req_id}) est en cours de traitement.")
+            if st.button("Actualiser le statut"):
+                st.rerun()
+        elif statut == "refuse":
+            st.error("❌ Votre demande a été refusée par l'administrateur.")
+            if st.button("Faire une nouvelle demande"):
+                st.session_state.req_id = None
+                st.rerun()
+        elif statut == "valide":
+            st.success("✅ Accès débloqué par l'administrateur !")
+            st.divider()
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("### Par période")
+                s_dl = st.date_input("Début export", datetime.today() - timedelta(days=30), key="dl_start")
+                e_dl = st.date_input("Fin export", datetime.today(), key="dl_end")
+
+                if st.button("Préparer fichier (Période)"):
+                    sync_cache(s_dl, e_dl)
+                    df = load_data(s_dl, e_dl)
+                    if not df.empty:
+                        csv_buffer = io.StringIO()
+                        df.to_csv(csv_buffer, index=False)
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
+                            zf.writestr("meteo_export.csv", csv_buffer.getvalue())
+                        st.download_button("Télécharger ZIP", zip_buffer.getvalue(), "meteo.zip", "application/zip")
+                    else:
+                        st.warning("Aucune donnée")
+
+            with col2:
+                st.markdown("### Toute la base")
+                if st.button("Préparer TOUTE LA BASE"):
+                    sync_cache()
+                    df = load_data()
+                    if not df.empty:
+                        csv_buffer = io.StringIO()
+                        df.to_csv(csv_buffer, index=False)
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
+                            zf.writestr("meteo_full.csv", csv_buffer.getvalue())
+                        st.download_button("Télécharger TOUT (ZIP)", zip_buffer.getvalue(), "full_history.zip", "application/zip")
+
+
+# ==========================================================
+# TAB 4 — ADMINISTRATION
+# ==========================================================
+
+with tab4:
+    st.subheader("Gestion des demandes d'accès")
+    password = st.text_input("Mot de passe Administrateur", type="password", key="admin_pwd")
+
+    if password == "ADMIN_PAD_2024":
+        cursor.execute("SELECT * FROM demandes WHERE statut='en_attente' ORDER BY timestamp DESC")
+        demandes = cursor.fetchall()
+
+        if not demandes:
+            st.info("Aucune demande en attente.")
         else:
-            st.info(f"Aucune donnée pour {p}")
+            for d in demandes:
+                with st.expander(f"📋 {d[1]} — {d[3]}"):
+                    st.write(f"**ID :** {d[0]}")
+                    st.write(f"**Motif :** {d[4]}")
+                    c1, c2 = st.columns(2)
+                    if c1.button("✅ Valider", key=f"val_{d[0]}"):
+                        cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (d[0],))
+                        conn.commit()
+                        envoyer_email(
+                            d[3],
+                            "✅ Demande de données PAD Approuvée",
+                            f"Bonjour {d[1]},<br><br>Votre demande d'accès aux données PAD a été <b>approuvée</b>.<br>Retournez sur le dashboard pour télécharger vos données.<br><br>Cordialement,<br>PAD Douala"
+                        )
+                        st.success(f"Demande {d[0]} validée et email envoyé.")
+                        st.rerun()
+                    if c2.button("❌ Refuser", key=f"ref_{d[0]}"):
+                        cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (d[0],))
+                        conn.commit()
+                        envoyer_email(
+                            d[3],
+                            "❌ Demande de données PAD Refusée",
+                            f"Bonjour {d[1]},<br><br>Nous regrettons de vous informer que votre demande d'accès aux données a été <b>refusée</b>.<br><br>Cordialement,<br>PAD Douala"
+                        )
+                        st.error(f"Demande {d[0]} refusée et email envoyé.")
+                        st.rerun()
+    elif password:
+        st.error("Mot de passe incorrect")
 
-# --- Carte Windy ---
-st.subheader("🌍 Carte météo – Windy")
+
+# ==========================================================
+# CARTE
+# ==========================================================
+
+st.subheader("Carte météo")
+
 st.components.v1.html(
 """
-<iframe width="100%" height="450"
-src="https://embed.windy.com/embed2.html?lat=4.05&lon=9.68&zoom=9&type=wind"
-frameborder="0"></iframe>
+<div id="map" style="height:500px;"></div>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+var map = L.map('map').setView([3.848, 11.502], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OSM'}).addTo(map);
+var stations=[
+    {name:"SM 2",lat:3.8480,lng:11.5021},
+    {name:"SM 3",lat:3.7601,lng:11.3803},
+    {name:"SM 4",lat:3.9833,lng:11.3166}
+];
+stations.forEach(function(s){
+    L.marker([s.lat,s.lng]).addTo(map).bindPopup("<b>"+s.name+"</b>").openPopup();
+});
+</script>
 """,
-height=450
+height=520
 )

@@ -19,7 +19,6 @@ import tempfile
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-
 # ==========================================================
 # CONFIG
 # ==========================================================
@@ -30,7 +29,7 @@ st.set_page_config(
 )
 
 PARQUET_CACHE = "valide.parquet"
-API_URL = "https://data-real-time-2.onrender.com/donnees"
+API_URL = "https://data-real-time-6.onrender.com/donnees"
 BATCH_SIZE = 10000
 
 # Session HTTP globale pour le pooling de connexions
@@ -164,7 +163,7 @@ def fetch_all_data(start=None, end=None):
     def fetch_week(i):
         w_start = weeks[i].strftime("%Y-%m-%d")
         w_end = weeks[i + 1].strftime("%Y-%m-%d")
-        params = {"limit": 20000, "start": w_start, "end": w_end}
+        params = {"limit": BATCH_SIZE, "start": w_start, "end": w_end}
         
         for attempt in range(5):
             try:
@@ -174,18 +173,16 @@ def fetch_all_data(start=None, end=None):
                     resp = r.json()
                     # Si l'API renvoie un message d'erreur de filtrage
                     if isinstance(resp, dict) and "message" in resp:
-                        st.sidebar.warning(f"⚠️ API : {resp['message']}")
-                        if "query_used" in resp:
-                            st.sidebar.code(resp["query_used"])
+                        st.sidebar.warning(f"⚠️ {w_start} : {resp['message']}")
                     
                     if isinstance(resp, list):
                         return resp
                     return resp.get("data", []) if isinstance(resp, dict) else []
                 else:
-                    st.sidebar.error(f"Erreur API ({r.status_code})")
+                    st.sidebar.error(f"Erreur API {r.status_code} sur {w_start}")
                 time.sleep(1)
             except Exception as e:
-                st.sidebar.error(f"Erreur Connexion : {e}")
+                st.sidebar.error(f"Échec Connexion {w_start} : {e}")
                 time.sleep(2)
         return []
 
@@ -208,9 +205,10 @@ def fetch_all_data(start=None, end=None):
 # ==========================================================
 
 def sync_cache(start=None, end=None):
+    st.sidebar.write(f"🔍 Sync: {start} ➔ {end}")
     data = fetch_all_data(start, end)
     if not data:
-        st.info("Aucune nouvelle donnée trouvée pour cette période.")
+        st.info(f"Aucune donnée trouvée sur le Cloud pour la période : {start} au {end}")
         return
     
     df_new = pd.DataFrame(data)

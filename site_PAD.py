@@ -383,35 +383,79 @@ tab1, tab2, tab3, tab4 = st.tabs([
 
 
 # ==========================================================
-# TAB 1
+# TAB 1 (7 JOURS)
 # ==========================================================
 
 with tab1:
-    if st.button("Charger données (7 derniers jours)"):
-        end = datetime.today()
-        start = end - timedelta(days=7)
-        df = load_data(start, end)
-        st.success(f"✅ {len(df)} lignes chargées")
-        with st.expander("🔍 Aperçu technique des données"):
-            st.dataframe(df.head(10))
-        afficher_graphes(df)
+    end_7 = datetime.today()
+    start_7 = end_7 - timedelta(days=7)
+    
+    # ÉTAT DE SYNCHRONISATION
+    sync_key_7 = f"synced_7d_{start_7.strftime('%Y%m%d')}"
+    if sync_key_7 not in st.session_state:
+        st.session_state[sync_key_7] = False
+
+    # ÉTAPE 1 : SYNCHRONISATION
+    st.markdown("### ☁️ Étape 1 : Récupération")
+    if st.button("📥 Synchroniser les 7 derniers jours depuis le Cloud"):
+        with st.spinner("Récupération en cours..."):
+            sync_cache(start_7, end_7)
+            st.session_state[sync_key_7] = True
+            # On récupère le nombre de lignes pour l'info
+            df_temp = load_data(start_7, end_7)
+            st.success(f"✅ Synchronisation terminée : {len(df_temp)} lignes récupérées.")
+            st.rerun()
+
+    # ÉTAPE 2 : VISUALISATION (Conditionnelle)
+    if st.session_state[sync_key_7]:
+        st.divider()
+        st.markdown("### 📊 Étape 2 : Visualisation")
+        if st.button("📈 Afficher les Graphiques (7j)"):
+            df = load_data(start_7, end_7)
+            if not df.empty:
+                with st.expander("🔍 Aperçu technique des données"):
+                    st.dataframe(df.head(10))
+                afficher_graphes(df)
+            else:
+                st.warning("Aucune donnée à afficher pour cette période.")
 
 
 # ==========================================================
-# TAB 2
+# TAB 2 (PERSONNALISE)
 # ==========================================================
 
 with tab2:
     col1, col2 = st.columns(2)
-    start = col1.date_input("Début", datetime.today() - timedelta(days=30))
-    end = col2.date_input("Fin", datetime.today())
+    p_start = col1.date_input("Début", datetime.today() - timedelta(days=30), key="p_start")
+    p_end = col2.date_input("Fin", datetime.today(), key="p_end")
 
-    if st.button("Charger période"):
-        df = load_data(start, end)
-        st.success(f"✅ {len(df)} lignes chargées")
-        with st.expander("🔍 Aperçu technique des données"):
-            st.dataframe(df.head(10))
-        afficher_graphes(df)
+    # ÉTAT DE SYNCHRONISATION
+    sync_key_p = f"synced_custom_{p_start}_{p_end}"
+    if sync_key_p not in st.session_state:
+        st.session_state[sync_key_p] = False
+
+    # ÉTAPE 1 : SYNCHRONISATION
+    st.markdown("### ☁️ Étape 1 : Récupération")
+    if st.button("📥 Synchroniser la période depuis le Cloud"):
+        with st.spinner("Récupération en cours..."):
+            sync_cache(p_start, p_end)
+            st.session_state[sync_key_p] = True
+            df_temp = load_data(p_start, p_end)
+            st.success(f"✅ Synchronisation terminée : {len(df_temp)} lignes récupérées.")
+            st.rerun()
+
+    # ÉTAPE 2 : VISUALISATION
+    if st.session_state[sync_key_p]:
+        st.divider()
+        st.markdown("### 📊 Étape 2 : Visualisation")
+        if st.button("📈 Afficher les Graphiques (Période)"):
+            df = load_data(p_start, p_end)
+            if not df.empty:
+                with st.expander("🔍 Aperçu technique des données"):
+                    st.dataframe(df.head(10))
+                afficher_graphes(df)
+            else:
+                st.warning("Aucune donnée à afficher pour cette période.")
 
 
 # ==========================================================

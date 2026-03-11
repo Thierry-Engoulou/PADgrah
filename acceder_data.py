@@ -48,33 +48,37 @@ def get_donnees():
     # On construit une liste de conditions pour $and
     and_conditions = []
     
+    # 1. Filtre Station (Optionnel)
     if station:
         and_conditions.append({
             "$or": [{"Station": station}, {"STATION NAME": station}]
         })
     
+    # 2. Filtre Date (Optionnel)
     if start_str or end_str:
+        # Préparation des objets Date pour MongoDB
         date_query = {}
         if start_str:
-            try:
-                date_query["$gte"] = datetime.strptime(start_str, "%Y-%m-%d")
+            try: date_query["$gte"] = datetime.strptime(start_str, "%Y-%m-%d")
             except: pass
         if end_str:
-            try:
-                date_query["$lte"] = datetime.strptime(end_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            try: date_query["$lte"] = datetime.strptime(end_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
             except: pass
         
-        if date_query:
-            # On cherche soit en tant que Date, soit en tant que String
-            date_cond = {
-                "$or": [
-                    {"DateTime": date_query},
-                    # Si c'est stocké en string, on fait une comparaison directe (si format ISO)
-                    {"DateTime": {"$gte": start_str if start_str else "0000", "$lte": end_str if end_str else "9999"}}
-                ]
-            }
-            and_conditions.append(date_cond)
+        # Préparation des filtres String (au cas où les dates sont stockées en Str)
+        # Pour end_str, on ajoute " 23:59:59" pour couvrir toute la journée en comparaison alphabétique
+        s_str = start_str if start_str else "0000"
+        e_str = (end_str + " 23:59:59") if end_str else "9999"
 
+        date_logic = {
+            "$or": [
+                {"DateTime": date_query},
+                {"DateTime": {"$gte": s_str, "$lte": e_str}}
+            ]
+        }
+        and_conditions.append(date_logic)
+
+    # Construction finale de la requête
     query = {"$and": and_conditions} if and_conditions else {}
 
     try:
@@ -88,13 +92,21 @@ def get_donnees():
 
         total = collection.count_documents(query)
         
-        # Scrub NaN values to prevent JSON errors
-        response_data = {
+        # SÉCURITÉ : Si vide avec filtres, on vérifie si la base est vide
+        if total == 0 and and_conditions:
+            sample = collection.find_one()
+            if sample:
+                return jsonify({
+                    "message": "Filtres trop restrictifs ou noms de champs incorrects",
+                    "sample_doc_keys": list(sample.keys()),
+                    "query_used": str(query)
+                }), 200
+
+        return jsonify(scrub_nan({
             "total": total,
             "count": len(donnees),
             "data": donnees
-        }
-        return jsonify(scrub_nan(response_data))
+        }))
         
     except Exception as e:
         return jsonify({"error": str(e), "query": str(query)}), 500

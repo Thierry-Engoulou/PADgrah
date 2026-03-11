@@ -168,18 +168,25 @@ def fetch_all_data(start=None, end=None):
         
         for attempt in range(5):
             try:
-                r = http_session.get(API_URL, params=params, timeout=30)
+                # Augmentation du timeout à 60s pour Render
+                r = http_session.get(API_URL, params=params, timeout=60)
                 if r.status_code == 200:
                     resp = r.json()
-                    # Parsing résilient : liste directe ou dictionnaire avec clé 'data'
+                    # Si l'API renvoie un message d'erreur de filtrage
+                    if isinstance(resp, dict) and "message" in resp:
+                        st.sidebar.warning(f"⚠️ API : {resp['message']}")
+                        if "query_used" in resp:
+                            st.sidebar.code(resp["query_used"])
+                    
                     if isinstance(resp, list):
                         return resp
                     return resp.get("data", []) if isinstance(resp, dict) else []
                 else:
                     st.sidebar.error(f"Erreur API ({r.status_code})")
                 time.sleep(1)
-            except Exception:
-                time.sleep(1)
+            except Exception as e:
+                st.sidebar.error(f"Erreur Connexion : {e}")
+                time.sleep(2)
         return []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -369,8 +376,24 @@ def afficher_graphes(df):
 
 
 # ==========================================================
-# INTERFACE
+# SIDEBAR - MAINTENANCE
 # ==========================================================
+with st.sidebar:
+    st.divider()
+    st.subheader("🛠 Maintenance")
+    if st.button("🚨 SYNCHRONISATION TOTALE (SANS FILTRE)"):
+        with st.spinner("Récupération de TOUTE la base (peut être lent)..."):
+            # On appelle fetch_all_data sans start/end
+            data = fetch_all_data(None, None)
+            if data:
+                df_new = pd.DataFrame(data)
+                df_new = normaliser_colonnes(df_new)
+                df_new["DateTime"] = pd.to_datetime(df_new["DateTime"])
+                df_new.to_parquet(PARQUET_CACHE, index=False)
+                st.success(f"Base reconstruite : {len(df_new)} lignes.")
+                st.rerun()
+            else:
+                st.error("Échec de la récupération totale.")
 
 st.title("Dashboard météo PAD")
 

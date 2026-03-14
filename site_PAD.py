@@ -30,7 +30,7 @@ st.set_page_config(
 
 PARQUET_CACHE = "valide.parquet"
 API_URL = "https://data-real-time-2.onrender.com/donnees"
-BATCH_SIZE = 20000
+BATCH_SIZE = 6000
 
 # Session HTTP globale pour le pooling de connexions
 http_session = requests.Session()
@@ -149,47 +149,48 @@ def fetch_all_data(start=None, end=None):
     d_start = pd.to_datetime(start) if start else pd.to_datetime("2024-01-01")
     d_end = pd.to_datetime(end) if end else datetime.today()
 
-    # Découpage intelligent par semaines
-    weeks = pd.date_range(start=d_start, end=d_end, freq="7D").tolist()
-    if not weeks or weeks[-1] < d_end:
-        weeks.append(d_end)
+    # Découpage intelligent par jours pour éviter les Timeouts (Render + MongoDB)
+    days = pd.date_range(start=d_start, end=d_end, freq="1D").tolist()
+    if not days or days[-1] < d_end:
+        days.append(d_end)
 
     all_data = []
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    total_steps = max(len(weeks) - 1, 1)
+    total_steps = max(len(days) - 1, 1)
 
-    def fetch_week(i):
-        w_start = weeks[i].strftime("%Y-%m-%d")
-        w_end = weeks[i + 1].strftime("%Y-%m-%d")
-        params = {"limit": BATCH_SIZE, "start": w_start, "end": w_end}
+    def fetch_chunk(i):
+        c_start = days[i].strftime("%Y-%m-%d")
+        c_end = days[i + 1].strftime("%Y-%m-%d")
+        params = {"limit": BATCH_SIZE, "start": c_start, "end": c_end}
         
-        for attempt in range(5):
+        for attempt in range(4):
             try:
                 # Augmentation du timeout à 60s pour Render
                 r = http_session.get(API_URL, params=params, timeout=60)
                 if r.status_code == 200:
                     resp = r.json()
                     if isinstance(resp, dict) and "message" in resp:
-                        st.sidebar.warning(f"⚠️ {w_start} : {resp['message']}")
+                        # Log plus discret car c'est normal d'avoir des jours vides
+                        pass
                     
                     if isinstance(resp, list):
                         return resp
                     return resp.get("data", []) if isinstance(resp, dict) else []
                 elif r.status_code == 429:
-                    st.sidebar.warning(f"🚦 Rate Limit sur {w_start}. Pause...")
-                    time.sleep(5 + attempt * 2)
+                    st.sidebar.warning(f"🚦 Rate Limit sur {c_start}. Pause...")
+                    time.sleep(3 + attempt * 2)
                 else:
-                    st.sidebar.error(f"Erreur API {r.status_code} sur {w_start}")
-                time.sleep(1)
+                    st.sidebar.error(f"Erreur API {r.status_code} sur {c_start}")
+                time.sleep(0.5)
             except Exception as e:
-                st.sidebar.error(f"Échec Connexion {w_start} : {e}")
-                time.sleep(2)
+                st.sidebar.error(f"Échec Connexion {c_start} : {e}")
+                time.sleep(1)
         return []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(fetch_week, i): i for i in range(total_steps)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(fetch_chunk, i): i for i in range(total_steps)}
         for count, future in enumerate(concurrent.futures.as_completed(futures)):
             res = future.result()
             if res:

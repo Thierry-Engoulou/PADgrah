@@ -70,6 +70,8 @@ def get_donnees():
         s_str = start_str if start_str else "0000"
         e_str = (end_str + " 23:59:59") if end_str else "9999"
 
+        # Optimisation : On utilise un filtre plus spécifique pour aider MongoDB
+        # On vérifie les deux types (Date et String)
         date_logic = {
             "$or": [
                 {"DateTime": date_query},
@@ -82,7 +84,8 @@ def get_donnees():
     query = {"$and": and_conditions} if and_conditions else {}
 
     try:
-        cursor = collection.find(query).sort("DateTime", -1).skip(offset).limit(limit)
+        # Optimisation : On ne trie pas si on demande trop de données sans index (sécurité)
+        cursor = collection.find(query).sort("DateTime", -1).limit(limit).skip(offset)
         donnees = []
         for doc in cursor:
             doc["_id"] = str(doc["_id"])

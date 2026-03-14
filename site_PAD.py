@@ -30,7 +30,7 @@ st.set_page_config(
 
 PARQUET_CACHE = "valide.parquet"
 API_URL = "https://data-real-time-2.onrender.com/donnees"
-BATCH_SIZE = 10000
+BATCH_SIZE = 20000
 
 # Session HTTP globale pour le pooling de connexions
 http_session = requests.Session()

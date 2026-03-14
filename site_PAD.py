@@ -438,8 +438,8 @@ with tab1:
 
 with tab2:
     col1, col2 = st.columns(2)
-    p_start = col1.date_input("Début", datetime.today() - timedelta(days=30), key="p_start")
-    p_end = col2.date_input("Fin", datetime.today(), key="p_end")
+    p_start = col1.date_input("Début", datetime(2024, 1, 1), min_value=datetime(2024, 1, 1), key="p_start")
+    p_end = col2.date_input("Fin", datetime.today(), min_value=datetime(2024, 1, 1), key="p_end")
 
     # ÉTAT DE SYNCHRONISATION
     sync_key_p = f"synced_custom_{p_start}_{p_end}"
@@ -471,86 +471,102 @@ with tab2:
 
 
 # ==========================================================
-# TAB 3 — TELECHARGEMENT (EXCEL & NETCDF)
+# TAB 3 — TELECHARGEMENT AVEC VALIDATION ADMIN
 # ==========================================================
 
 with tab3:
-    st.subheader("Extraction des données")
-    st.info("Sélectionnez votre période et le format souhaité. Le téléchargement est direct.")
-    
-    format_choisi = st.radio("Format d'exportation", ["Excel (.xlsx)", "NetCDF (.nc)"], horizontal=True)
+    st.subheader("Accès aux données sécurisé")
 
-    col1, col2 = st.columns(2)
+    if "req_id" not in st.session_state:
+        st.session_state.req_id = None
 
-    with col1:
-        st.markdown("### 📅 Par période")
-        s_dl = st.date_input("Début export", datetime.today() - timedelta(days=30), key="dl_start")
-        e_dl = st.date_input("Fin export", datetime.today(), key="dl_end")
-
-        if st.button("🚀 Préparer fichier (Période)"):
-            with st.spinner("Préparation en cours..."):
-                sync_cache(s_dl, e_dl)
-                df = load_data(s_dl, e_dl)
-                if not df.empty:
-                    if format_choisi == "Excel (.xlsx)":
-                        xlsx_buffer = io.BytesIO()
-                        with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
-                            df.to_excel(writer, index=False, sheet_name="Meteo_PAD")
-                        st.download_button("📥 Télécharger Excel", xlsx_buffer.getvalue(), "meteo_pad.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    else:
-                        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
-                            ds = df.set_index(['DateTime', 'Station']).to_xarray()
-                            ds.attrs['title'] = 'Données Météo PAD'
-                            ds.to_netcdf(tmp.name, engine="h5netcdf")
-                            tmp_path = tmp.name
-                        with open(tmp_path, "rb") as f:
-                            st.download_button("📥 Télécharger NetCDF (.nc)", f.read(), "meteo.nc", "application/x-netcdf")
-                        os.remove(tmp_path)
-                else:
-                    st.warning("Aucune donnée trouvée sur cette période.")
-
-    with col2:
-        st.markdown("### 📂 Toute la base")
-        if st.button("🚀 Préparer TOUTE LA BASE"):
-            with st.spinner("Synchronisation totale..."):
-                sync_cache()
-                df = load_data()
-                if not df.empty:
-                    if format_choisi == "Excel (.xlsx)":
-                        xlsx_buffer = io.BytesIO()
-                        with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
-                            df.to_excel(writer, index=False, sheet_name="Meteo_Full")
-                        st.download_button("📥 Télécharger TOUT (Excel)", xlsx_buffer.getvalue(), "full_history_pad.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    else:
-                        with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
-                            ds = df.set_index(['DateTime', 'Station']).to_xarray()
-                            ds.to_netcdf(tmp.name, engine="h5netcdf")
-                            tmp_path = tmp.name
-                        with open(tmp_path, "rb") as f:
-                            st.download_button("📥 Télécharger TOUT (NetCDF)", f.read(), "full_history.nc", "application/x-netcdf")
-                        os.remove(tmp_path)
-
-    st.divider()
-    
-    # Formulaire facultatif après le téléchargement ou pour information
-    with st.expander("📝 Formulaire d'utilisation (Optionnel)"):
-        st.write("Aidez-nous à améliorer le service en nous disant comment vous utilisez ces données.")
-        with st.form("feedback_form"):
+    if not st.session_state.req_id:
+        st.info("🔓 Veuillez remplir ce formulaire pour obtenir l'accès au téléchargement (Validation Administrateur requise).")
+        with st.form("request_form"):
             nom = st.text_input("Nom / Institution")
             email_user = st.text_input("Votre Email")
             raison = st.text_area("Motif de l'utilisation")
-            submit = st.form_submit_button("Envoyer")
-            if submit and nom and email_user:
+            submit = st.form_submit_button("Envoyer la demande d'accès")
+
+            if submit and nom and email_user and raison:
                 req_id = str(uuid.uuid4())[:8]
                 cursor.execute("INSERT INTO demandes VALUES (?,?,?,?,?,?,?,?)",
-                               (req_id, nom, "", email_user, raison, "info_only", "", time.time()))
+                               (req_id, nom, "", email_user, raison, "en_attente", "", time.time()))
                 conn.commit()
                 envoyer_email(
                     "engoulouthierry62@gmail.com",
-                    f"INFO PAD - {nom} [{req_id}]",
-                    f"L'utilisateur a téléchargé des données.<br><b>Nom:</b> {nom}<br><b>Email:</b> {email_user}<br><b>Motif:</b> {raison}"
+                    f"DEMANDE ACCÈS PAD - {nom} [{req_id}]",
+                    f"Une nouvelle demande a été déposée.<br><b>ID:</b> {req_id}<br><b>Nom:</b> {nom}<br><b>Email:</b> {email_user}<br><b>Motif:</b> {raison}"
                 )
-                st.success("Merci pour votre retour !")
+                st.session_state.req_id = req_id
+                st.success(f"Demande #{req_id} envoyée ! L'administrateur a été notifié. Revenez ici une fois votre accès validé par email.")
+                st.rerun()
+    else:
+        cursor.execute("SELECT statut FROM demandes WHERE id=?", (st.session_state.req_id,))
+        row = cursor.fetchone()
+        statut = row[0] if row else "inconnu"
+
+        if statut == "en_attente":
+            st.warning(f"🕒 Votre demande (#{st.session_state.req_id}) est en cours d'examen par l'administrateur.")
+            if st.button("🔄 Actualiser le statut"):
+                st.rerun()
+        elif statut == "refuse":
+            st.error("❌ Votre demande a été refusée.")
+            if st.button("📝 Faire une nouvelle demande"):
+                st.session_state.req_id = None
+                st.rerun()
+        elif statut == "valide":
+            st.success("✅ Accès autorisé ! Vous pouvez maintenant télécharger les données.")
+            
+            st.divider()
+            format_choisi = st.radio("Format d'exportation", ["Excel (.xlsx)", "NetCDF (.nc)"], horizontal=True)
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("### 📅 Par période")
+                s_dl = st.date_input("Début export", datetime(2024,1,1), min_value=datetime(2024,1,1), key="dl_start")
+                e_dl = st.date_input("Fin export", datetime.today(), min_value=datetime(2024,1,1), key="dl_end")
+
+                if st.button("🚀 Préparer fichier (Période)"):
+                    with st.spinner("Préparation..."):
+                        sync_cache(s_dl, e_dl)
+                        df = load_data(s_dl, e_dl)
+                        if not df.empty:
+                            if format_choisi == "Excel (.xlsx)":
+                                xlsx_buffer = io.BytesIO()
+                                with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
+                                    df.to_excel(writer, index=False, sheet_name="Meteo_PAD")
+                                st.download_button("📥 Télécharger Excel", xlsx_buffer.getvalue(), "meteo_pad.xlsx")
+                            else:
+                                with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+                                    ds = df.set_index(['DateTime', 'Station']).to_xarray()
+                                    ds.to_netcdf(tmp.name, engine="h5netcdf")
+                                    tmp_path = tmp.name
+                                with open(tmp_path, "rb") as f:
+                                    st.download_button("📥 Télécharger NetCDF", f.read(), "meteo.nc")
+                                os.remove(tmp_path)
+            
+            with col2:
+                st.markdown("### 📂 Toute la base")
+                if st.button("🚀 Préparer TOUTE LA BASE"):
+                    with st.spinner("Synchronisation totale (2024 -> Aujourd'hui)..."):
+                        sync_cache(None, None) # None, None = 2024 à Aujourd'hui
+                        df = load_data()
+                        if not df.empty:
+                            if format_choisi == "Excel (.xlsx)":
+                                xlsx_buffer = io.BytesIO()
+                                with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
+                                    df.to_excel(writer, index=False, sheet_name="Meteo_Full")
+                                st.download_button("📥 Télécharger TOUT (Excel)", xlsx_buffer.getvalue(), "full_history_pad.xlsx")
+                            else:
+                                with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+                                    ds = df.set_index(['DateTime', 'Station']).to_xarray()
+                                    ds.to_netcdf(tmp.name, engine="h5netcdf")
+                                    tmp_path = tmp.name
+                                with open(tmp_path, "rb") as f:
+                                    st.download_button("📥 Télécharger TOUT (NetCDF)", f.read(), "full_history.nc")
+                                os.remove(tmp_path)
 
 
 # ==========================================================

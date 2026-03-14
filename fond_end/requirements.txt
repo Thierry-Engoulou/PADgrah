@@ -12,3 +12,4 @@ pyarrow
 xarray
 netCDF4
 h5netcdf
+openpyxl

@@ -171,13 +171,15 @@ def fetch_all_data(start=None, end=None):
                 r = http_session.get(API_URL, params=params, timeout=60)
                 if r.status_code == 200:
                     resp = r.json()
-                    # Si l'API renvoie un message d'erreur de filtrage
                     if isinstance(resp, dict) and "message" in resp:
                         st.sidebar.warning(f"⚠️ {w_start} : {resp['message']}")
                     
                     if isinstance(resp, list):
                         return resp
                     return resp.get("data", []) if isinstance(resp, dict) else []
+                elif r.status_code == 429:
+                    st.sidebar.warning(f"🚦 Rate Limit sur {w_start}. Pause...")
+                    time.sleep(5 + attempt * 2)
                 else:
                     st.sidebar.error(f"Erreur API {r.status_code} sur {w_start}")
                 time.sleep(1)
@@ -186,7 +188,7 @@ def fetch_all_data(start=None, end=None):
                 time.sleep(2)
         return []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = {executor.submit(fetch_week, i): i for i in range(total_steps)}
         for count, future in enumerate(concurrent.futures.as_completed(futures)):
             res = future.result()
@@ -269,20 +271,9 @@ def load_data(start=None, end=None):
         e_dt = pd.to_datetime(end)
         mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
         
-        # Si on n'a presque pas de données pour la plage demandée, on force une sync
-        if len(df[mask]) < 5:
-            sync_cache(start, end)
-            try:
-                df = pd.read_parquet(PARQUET_CACHE)
-                df = normaliser_colonnes(df)
-                df["DateTime"] = pd.to_datetime(df["DateTime"])
-                mask = (df["DateTime"] >= s_dt) & (df["DateTime"] <= e_dt)
-            except Exception:
-                pass
-        
         # === Filtrage Robuste (User Tip) ===
         if len(df[mask]) == 0:
-            st.warning(f"⚠️ Aucune donnée entre {start} et {end}. Affichage des dernières données disponibles.")
+            st.warning(f"⚠️ Aucune donnée entre {start} et {end} dans le cache local. Veuillez cliquer sur 'Synchroniser' (Étape 1) si besoin.")
         else:
             df = df[mask]
 

@@ -29,7 +29,7 @@ st.set_page_config(
 )
 
 PARQUET_CACHE = "valide.parquet"
-API_URL = "https://data-real-time-6.onrender.com/donnees"
+API_URL = "https://data-real-time-2.onrender.com/donnees"
 BATCH_SIZE = 10000
 
 # Session HTTP globale pour le pooling de connexions

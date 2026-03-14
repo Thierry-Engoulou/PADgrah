@@ -56,29 +56,13 @@ def get_donnees():
     
     # 2. Filtre Date (Optionnel)
     if start_str or end_str:
-        # Préparation des objets Date pour MongoDB
-        date_query = {}
-        if start_str:
-            try: date_query["$gte"] = datetime.strptime(start_str, "%Y-%m-%d")
-            except: pass
-        if end_str:
-            try: date_query["$lte"] = datetime.strptime(end_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
-            except: pass
-        
-        # Préparation des filtres String (au cas où les dates sont stockées en Str)
-        # Pour end_str, on ajoute " 23:59:59" pour couvrir toute la journée en comparaison alphabétique
+        # Les dates sont stockées en Str ("YYYY-MM-DD HH:MM:SS")
         s_str = start_str if start_str else "0000"
         e_str = (end_str + " 23:59:59") if end_str else "9999"
 
-        # Optimisation : On utilise un filtre plus spécifique pour aider MongoDB
-        # On vérifie les deux types (Date et String)
-        date_logic = {
-            "$or": [
-                {"DateTime": date_query},
-                {"DateTime": {"$gte": s_str, "$lte": e_str}}
-            ]
-        }
-        and_conditions.append(date_logic)
+        and_conditions.append({
+            "DateTime": {"$gte": s_str, "$lte": e_str}
+        })
 
     # Construction finale de la requête
     query = {"$and": and_conditions} if and_conditions else {}
@@ -93,20 +77,17 @@ def get_donnees():
                 doc["DateTime"] = doc["DateTime"].strftime("%Y-%m-%d %H:%M:%S")
             donnees.append(doc)
 
-        total = collection.count_documents(query)
-        
         # SÉCURITÉ : Si vide avec filtres, on vérifie si la base est vide
-        if total == 0 and and_conditions:
+        if len(donnees) == 0 and and_conditions:
             sample = collection.find_one()
             if sample:
                 return jsonify({
-                    "message": "Filtres trop restrictifs ou noms de champs incorrects",
+                    "message": "Filtres trop restrictifs ou aucune donnee pour cette periode",
                     "sample_doc_keys": list(sample.keys()),
                     "query_used": str(query)
                 }), 200
 
         return jsonify(scrub_nan({
-            "total": total,
             "count": len(donnees),
             "data": donnees
         }))

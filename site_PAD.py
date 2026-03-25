@@ -18,6 +18,11 @@ import xarray as xr
 import tempfile
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import threading
+
+# URL exacte du Dashboard Streamlit (Mettre à jour si vous déployez l'application en ligne)
+# L'API étant sur data-real-time-2, le Dashboard a sûrement une URL différente (ex: meteo-pad.onrender.com).
+APP_URL = "http://localhost:8501"
 
 # ==========================================================
 # CONFIG
@@ -58,6 +63,7 @@ timestamp REAL
 conn.commit()
 
 
+
 # ==========================================================
 # EMAIL
 # ==========================================================
@@ -83,7 +89,59 @@ def envoyer_email(dest, sujet, contenu):
             for d in dest_list:
                 s.sendmail(expediteur, d, msg.as_string())
     except Exception as e:
-        st.error(f"Erreur Email : {e}")
+        print(f"Erreur Email : {e}")
+
+def envoyer_email_async(dest, sujet, contenu):
+    thread = threading.Thread(target=envoyer_email, args=(dest, sujet, contenu))
+    thread.start()
+
+# ==========================================================
+# ROUTAGE PAR LIENS EMAILS (VALIDATION / REFUS ADMIN)
+# ==========================================================
+params = st.query_params
+if "action" in params and "req_id" in params:
+    action = params["action"]
+    req_id = params["req_id"]
+    cursor.execute("SELECT nom, email, statut FROM demandes WHERE id=?", (req_id,))
+    row = cursor.fetchone()
+    if row:
+        c_nom, c_email, c_statut = row
+        if c_statut == "en_attente":
+            if action == "valider":
+                cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (req_id,))
+                conn.commit()
+                msg_user = f"Bonjour {c_nom},<br><br>Votre demande d'accès aux données a été <b>approuvée</b>.<br>Veuillez cliquer sur ce lien pour télécharger vos données : <br><a href='{APP_URL}/?dl_req_id={req_id}'>📥 Accéder à mes données</a><br><br>Cordialement,<br>PAD Douala"
+                envoyer_email_async(c_email, "✅ Demande de données PAD Approuvée", msg_user)
+                st.success(f"✅ Demande #{req_id} VALIDÉE ! Un email a été envoyé au demandeur automatiquement.")
+            elif action == "refuser":
+                cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (req_id,))
+                conn.commit()
+                msg_user = f"Bonjour {c_nom},<br><br>Nous regrettons de vous informer que l'Administration du PAD a décidé de <b>refuser</b> votre demande d'accès aux données pour le motif invoqué.<br><br>Cordialement,<br>L'Administration du PAD Douala"
+                envoyer_email_async(c_email, "❌ Demande de données PAD Refusée", msg_user)
+                st.error(f"❌ Demande #{req_id} REFUSÉE ! Un email a été envoyé au demandeur automatiquement.")
+            
+            # Afficher un bouton pour retourner à l'accueil
+            if st.button("⬅️ Retour au Dashboard"):
+                st.query_params.clear()
+                st.rerun()
+            
+            # On arrête le reste de l'application pour que la page charge INSTANTANÉMENT
+            st.stop()
+        else:
+            st.info(f"ℹ️ La demande #{req_id} a déjà été traitée (Statut: {c_statut}).")
+            if st.button("⬅️ Retour au Dashboard"):
+                st.query_params.clear()
+                st.rerun()
+            st.stop()
+    else:
+        st.warning(f"⚠️ Demande #{req_id} introuvable.")
+        if st.button("⬅️ Retour au Dashboard"):
+            st.query_params.clear()
+            st.rerun()
+        st.stop()
+
+if "dl_req_id" in params:
+    st.session_state.req_id = params["dl_req_id"]
 
 
 # ==========================================================
@@ -243,6 +301,7 @@ def sync_cache(start=None, end=None):
 # CHARGEMENT DES DONNEES
 # ==========================================================
 
+@st.cache_data(show_spinner=False)
 def load_data(start=None, end=None):
     # Si le cache Parquet n'existe pas, on synchronise la période demandée
     if not os.path.exists(PARQUET_CACHE) or os.path.getsize(PARQUET_CACHE) == 0:
@@ -299,190 +358,22 @@ def downsample(df, max_points=2000):
     return df.iloc[::step]
 
 
-# ==========================================================
-# GRAPHES
-# ==========================================================
+st.title("Admin & Téléchargement PAD")
 
-params_list = ["TIDE HEIGHT", "WIND SPEED", "WIND DIR", "AIR PRESSURE", "AIR TEMPERATURE", "DEWPOINT", "HUMIDITY"]
-
-STATION_COLORS = {
-    "SM 2": "blue",
-    "SM 3": "crimson",
-    "SM 4": "green",
-}
-
-
-def afficher_graphes(df):
-    if df.empty:
-        st.warning("Aucune donnée")
-        return
-
-    window = st.sidebar.slider("Lissage", 1, 51, 5)
-    no_downsample = st.sidebar.checkbox("Désactiver échantillonnage")
-
-    for p in params_list:
-        if p not in df.columns:
-            continue
-
-        fig = go.Figure()
-
-        for station in df["Station"].unique():
-            d = df[df["Station"] == station].copy()
-            if not no_downsample:
-                d = downsample(d, 2000)
-
-            color = STATION_COLORS.get(station, "orange")
-
-            if p == "TIDE HEIGHT":
-                h_harmonic = calculer_modele_harmonique(d, station)
-                if h_harmonic is not None:
-                    fig.add_trace(go.Scattergl(
-                        x=d["DateTime"], y=h_harmonic,
-                        name=f"{station} (Modèle)",
-                        line=dict(width=3, color=color),
-                        mode="lines"
-                    ))
-                fig.add_trace(go.Scattergl(
-                    x=d["DateTime"], y=d[p],
-                    name=f"{station} (Données)",
-                    mode="markers",
-                    marker=dict(size=4, opacity=0.4, color=color)
-                ))
-            else:
-                d["display"] = d[p].rolling(window, center=True, min_periods=1).mean()
-                fig.add_trace(go.Scattergl(
-                    x=d["DateTime"], y=d["display"],
-                    name=station,
-                    line=dict(color=color),
-                    mode="lines" if not no_downsample else "lines+markers"
-                ))
-
-        fig.update_layout(
-            title=p,
-            hovermode="x unified",
-            template="plotly_dark" if p == "TIDE HEIGHT" else "plotly_white"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-
-# ==========================================================
-# SIDEBAR - MAINTENANCE
-# ==========================================================
-with st.sidebar:
-    st.divider()
-    st.subheader("🛠 Maintenance")
-    if st.button("🚨 SYNCHRONISATION TOTALE (SANS FILTRE)"):
-        with st.spinner("Récupération de TOUTE la base (peut être lent)..."):
-            # On appelle fetch_all_data sans start/end
-            data = fetch_all_data(None, None)
-            if data:
-                df_new = pd.DataFrame(data)
-                df_new = normaliser_colonnes(df_new)
-                df_new["DateTime"] = pd.to_datetime(df_new["DateTime"])
-                df_new.to_parquet(PARQUET_CACHE, index=False)
-                st.success(f"Base reconstruite : {len(df_new)} lignes.")
-                st.rerun()
-            else:
-                st.error("Échec de la récupération totale.")
-
-st.title("Dashboard météo PAD")
-
-tab1, tab2, tab3, tab4 = st.tabs([
-    "7 jours",
-    "Période personnalisée",
+tab1, tab2 = st.tabs([
     "Télécharger",
     "Administration 🔐"
 ])
 
 
-# ==========================================================
-# TAB 1 (7 JOURS)
-# ==========================================================
-
 with tab1:
-    end_7 = datetime.today()
-    start_7 = end_7 - timedelta(days=7)
-    
-    # ÉTAT DE SYNCHRONISATION
-    sync_key_7 = f"synced_7d_{start_7.strftime('%Y%m%d')}"
-    if sync_key_7 not in st.session_state:
-        st.session_state[sync_key_7] = False
-
-    # ÉTAPE 1 : SYNCHRONISATION
-    st.markdown("### ☁️ Étape 1 : Récupération")
-    if st.button("📥 Synchroniser les 7 derniers jours depuis le Cloud"):
-        with st.spinner("Récupération en cours..."):
-            sync_cache(start_7, end_7)
-            st.session_state[sync_key_7] = True
-            # On récupère le nombre de lignes pour l'info
-            df_temp = load_data(start_7, end_7)
-            st.success(f"✅ Synchronisation terminée : {len(df_temp)} lignes récupérées.")
-            st.rerun()
-
-    # ÉTAPE 2 : VISUALISATION (Conditionnelle)
-    if st.session_state[sync_key_7]:
-        st.divider()
-        st.markdown("### 📊 Étape 2 : Visualisation")
-        if st.button("📈 Afficher les Graphiques (7j)"):
-            df = load_data(start_7, end_7)
-            if not df.empty:
-                with st.expander("🔍 Aperçu technique des données"):
-                    st.dataframe(df.head(10))
-                afficher_graphes(df)
-            else:
-                st.warning("Aucune donnée à afficher pour cette période.")
-
-
-# ==========================================================
-# TAB 2 (PERSONNALISE)
-# ==========================================================
-
-with tab2:
-    col1, col2 = st.columns(2)
-    p_start = col1.date_input("Début", datetime(2024, 1, 1), min_value=datetime(2024, 1, 1), key="p_start")
-    p_end = col2.date_input("Fin", datetime.today(), min_value=datetime(2024, 1, 1), key="p_end")
-
-    # ÉTAT DE SYNCHRONISATION
-    sync_key_p = f"synced_custom_{p_start}_{p_end}"
-    if sync_key_p not in st.session_state:
-        st.session_state[sync_key_p] = False
-
-    # ÉTAPE 1 : SYNCHRONISATION
-    st.markdown("### ☁️ Étape 1 : Récupération")
-    if st.button("📥 Synchroniser la période depuis le Cloud"):
-        with st.spinner("Récupération en cours..."):
-            sync_cache(p_start, p_end)
-            st.session_state[sync_key_p] = True
-            df_temp = load_data(p_start, p_end)
-            st.success(f"✅ Synchronisation terminée : {len(df_temp)} lignes récupérées.")
-            st.rerun()
-
-    # ÉTAPE 2 : VISUALISATION
-    if st.session_state[sync_key_p]:
-        st.divider()
-        st.markdown("### 📊 Étape 2 : Visualisation")
-        if st.button("📈 Afficher les Graphiques (Période)"):
-            df = load_data(p_start, p_end)
-            if not df.empty:
-                with st.expander("🔍 Aperçu technique des données"):
-                    st.dataframe(df.head(10))
-                afficher_graphes(df)
-            else:
-                st.warning("Aucune donnée à afficher pour cette période.")
-
-
-# ==========================================================
-# TAB 3 — TELECHARGEMENT AVEC VALIDATION ADMIN
-# ==========================================================
-
-with tab3:
     st.subheader("Accès aux données sécurisé")
+    st.info("⚠️ Pour télécharger les données de **plus de 7 jours**, veuillez faire une demande à l'Administration du PAD en remplissant ce formulaire.")
 
     if "req_id" not in st.session_state:
         st.session_state.req_id = None
 
     if not st.session_state.req_id:
-        st.info("🔓 Veuillez remplir ce formulaire pour obtenir l'accès au téléchargement (Validation Administrateur requise).")
         with st.form("request_form"):
             nom = st.text_input("Nom / Institution")
             email_user = st.text_input("Votre Email")
@@ -494,13 +385,32 @@ with tab3:
                 cursor.execute("INSERT INTO demandes VALUES (?,?,?,?,?,?,?,?)",
                                (req_id, nom, "", email_user, raison, "en_attente", "", time.time()))
                 conn.commit()
-                envoyer_email(
+                
+                lien_val = f"{APP_URL}/?action=valider&req_id={req_id}"
+                lien_ref = f"{APP_URL}/?action=refuser&req_id={req_id}"
+                
+                msg_admin = f"""
+                <p>Une nouvelle demande de téléchargement a été déposée.</p>
+                <b>ID:</b> {req_id}<br>
+                <b>Nom:</b> {nom}<br>
+                <b>Email:</b> {email_user}<br>
+                <b>Motif:</b> <span style="color:#555;">{raison}</span><br><br>
+                <b>Action rapide (cliquez sur l'un des boutons) :</b><br><br>
+                <a href="{lien_val}" style="padding:10px 15px; background-color:green; color:white; text-decoration:none; border-radius:5px; font-weight:bold;">✅ VALIDER LA DEMANDE</a> 
+                &nbsp;&nbsp;&nbsp;&nbsp;
+                <a href="{lien_ref}" style="padding:10px 15px; background-color:red; color:white; text-decoration:none; border-radius:5px; font-weight:bold;">❌ REFUSER LA DEMANDE</a>
+                <br><br><br>
+                <i>Vous pouvez aussi gérer cette demande depuis l'onglet Administration de l'application.</i>
+                """
+                
+                envoyer_email_async(
                     "engoulouthierry62@gmail.com",
-                    f"DEMANDE ACCÈS PAD - {nom} [{req_id}]",
-                    f"Une nouvelle demande a été déposée.<br><b>ID:</b> {req_id}<br><b>Nom:</b> {nom}<br><b>Email:</b> {email_user}<br><b>Motif:</b> {raison}"
+                    f"🚨 DEMANDE ACCÈS PAD - {nom} [{req_id}]",
+                    msg_admin
                 )
+                
                 st.session_state.req_id = req_id
-                st.success(f"Demande #{req_id} envoyée ! L'administrateur a été notifié. Revenez ici une fois votre accès validé par email.")
+                st.success(f"⚡ Demande #{req_id} transmise immédiatement ! Vous recevrez un email de notification (avec lien de téléchargement) une fois l'accès validé.")
                 st.rerun()
     else:
         cursor.execute("SELECT statut FROM demandes WHERE id=?", (st.session_state.req_id,))
@@ -570,11 +480,7 @@ with tab3:
                                 os.remove(tmp_path)
 
 
-# ==========================================================
-# TAB 4 — ADMINISTRATION
-# ==========================================================
-
-with tab4:
+with tab2:
     st.subheader("Gestion des demandes d'accès")
     password = st.text_input("Mot de passe Administrateur", type="password", key="admin_pwd")
 
@@ -593,20 +499,20 @@ with tab4:
                     if c1.button("✅ Valider", key=f"val_{d[0]}"):
                         cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (d[0],))
                         conn.commit()
-                        envoyer_email(
+                        envoyer_email_async(
                             d[3],
                             "✅ Demande de données PAD Approuvée",
-                            f"Bonjour {d[1]},<br><br>Votre demande d'accès aux données PAD a été <b>approuvée</b>.<br>Retournez sur le dashboard pour télécharger vos données.<br><br>Cordialement,<br>PAD Douala"
+                            f"Bonjour {d[1]},<br><br>Votre demande d'accès aux données a été <b>approuvée</b>.<br>Veuillez cliquer sur ce lien pour télécharger vos données : <br><a href='{APP_URL}/?dl_req_id={d[0]}'>📥 Accéder à mes données</a><br><br>Cordialement,<br>PAD Douala"
                         )
                         st.success(f"Demande {d[0]} validée et email envoyé.")
                         st.rerun()
                     if c2.button("❌ Refuser", key=f"ref_{d[0]}"):
                         cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (d[0],))
                         conn.commit()
-                        envoyer_email(
+                        envoyer_email_async(
                             d[3],
                             "❌ Demande de données PAD Refusée",
-                            f"Bonjour {d[1]},<br><br>Nous regrettons de vous informer que votre demande d'accès aux données a été <b>refusée</b>.<br><br>Cordialement,<br>PAD Douala"
+                            f"Bonjour {d[1]},<br><br>Nous regrettons de vous informer que l'Administration du PAD a décidé de <b>refuser</b> votre demande d'accès aux données.<br><br>Cordialement,<br>PAD Douala"
                         )
                         st.error(f"Demande {d[0]} refusée et email envoyé.")
                         st.rerun()

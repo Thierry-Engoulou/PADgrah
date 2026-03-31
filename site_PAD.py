@@ -404,7 +404,7 @@ with tab1:
                 """
                 
                 envoyer_email_async(
-                    "engoulouthierry62@gmail.com",
+                    ["engoulouthierry62@gmail.com", "ulrichlangoul7@gmail.com"],
                     f"🚨 DEMANDE ACCÈS PAD - {nom} [{req_id}]",
                     msg_admin
                 )

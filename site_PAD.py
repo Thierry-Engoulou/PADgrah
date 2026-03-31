@@ -88,12 +88,10 @@ def envoyer_email(dest, sujet, contenu):
             s.login(expediteur, mot_de_passe)
             for d in dest_list:
                 s.sendmail(expediteur, d, msg.as_string())
+        return True
     except Exception as e:
         print(f"Erreur Email : {e}")
-
-def envoyer_email_async(dest, sujet, contenu):
-    thread = threading.Thread(target=envoyer_email, args=(dest, sujet, contenu))
-    thread.start()
+        return False
 
 # ==========================================================
 # ROUTAGE PAR LIENS EMAILS (VALIDATION / REFUS ADMIN)
@@ -111,13 +109,13 @@ if "action" in params and "req_id" in params:
                 cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (req_id,))
                 conn.commit()
                 msg_user = f"Bonjour {c_nom},<br><br>Votre demande d'accès aux données a été <b>approuvée</b>.<br>Veuillez cliquer sur ce lien pour télécharger vos données : <br><a href='{APP_URL}/?dl_req_id={req_id}'>📥 Accéder à mes données</a><br><br>Cordialement,<br>PAD Douala"
-                envoyer_email_async(c_email, "✅ Demande de données PAD Approuvée", msg_user)
+                envoyer_email(c_email, "✅ Demande de données PAD Approuvée", msg_user)
                 st.success(f"✅ Demande #{req_id} VALIDÉE ! Un email a été envoyé au demandeur automatiquement.")
             elif action == "refuser":
                 cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (req_id,))
                 conn.commit()
-                msg_user = f"Bonjour {c_nom},<br><br>Nous regrettons de vous informer que l'Administration du PAD a décidé de <b>refuser</b> votre demande d'accès aux données pour le motif invoqué.<br><br>Cordialement,<br>L'Administration du PAD Douala"
-                envoyer_email_async(c_email, "❌ Demande de données PAD Refusée", msg_user)
+                msg_user = f"Bonjour {c_nom},<br><br>Nous regrettons de vous informer que l'Administration du PAD a décidé de <b>refuser</b> votre demande d'accès aux données pour le motif invoqué.<br>Nous vous remercions tout de même pour l'intérêt que vous portez à nos données.<br><br>Cordialement,<br>L'Administration du PAD Douala"
+                envoyer_email(c_email, "❌ Demande de données PAD Refusée", msg_user)
                 st.error(f"❌ Demande #{req_id} REFUSÉE ! Un email a été envoyé au demandeur automatiquement.")
             
             # Afficher un bouton pour retourner à l'accueil
@@ -403,14 +401,16 @@ with tab1:
                 <i>Vous pouvez aussi gérer cette demande depuis l'onglet Administration de l'application.</i>
                 """
                 
-                envoyer_email_async(
+                success = envoyer_email(
                     ["engoulouthierry62@gmail.com", "ulrichlangoul7@gmail.com"],
                     f"🚨 DEMANDE ACCÈS PAD - {nom} [{req_id}]",
                     msg_admin
                 )
                 
-                st.session_state.req_id = req_id
-                st.success(f"⚡ Demande #{req_id} transmise immédiatement ! Vous recevrez un email de notification (avec lien de téléchargement) une fois l'accès validé.")
+                if success:
+                    st.session_state.req_id = req_id
+                else:
+                    st.error("⚠️ L'envoi de l'email à l'administrateur a échoué. Veuillez réessayer.")
                 st.rerun()
     else:
         cursor.execute("SELECT statut FROM demandes WHERE id=?", (st.session_state.req_id,))
@@ -499,7 +499,7 @@ with tab2:
                     if c1.button("✅ Valider", key=f"val_{d[0]}"):
                         cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (d[0],))
                         conn.commit()
-                        envoyer_email_async(
+                        envoyer_email(
                             d[3],
                             "✅ Demande de données PAD Approuvée",
                             f"Bonjour {d[1]},<br><br>Votre demande d'accès aux données a été <b>approuvée</b>.<br>Veuillez cliquer sur ce lien pour télécharger vos données : <br><a href='{APP_URL}/?dl_req_id={d[0]}'>📥 Accéder à mes données</a><br><br>Cordialement,<br>PAD Douala"
@@ -509,10 +509,10 @@ with tab2:
                     if c2.button("❌ Refuser", key=f"ref_{d[0]}"):
                         cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (d[0],))
                         conn.commit()
-                        envoyer_email_async(
+                        envoyer_email(
                             d[3],
                             "❌ Demande de données PAD Refusée",
-                            f"Bonjour {d[1]},<br><br>Nous regrettons de vous informer que l'Administration du PAD a décidé de <b>refuser</b> votre demande d'accès aux données.<br><br>Cordialement,<br>PAD Douala"
+                            f"Bonjour {d[1]},<br><br>Nous regrettons de vous informer que l'Administration du PAD a décidé de <b>refuser</b> votre demande d'accès aux données.<br>Nous vous remercions tout de même pour l'intérêt que vous portez à nos données.<br><br>Cordialement,<br>PAD Douala"
                         )
                         st.error(f"Demande {d[0]} refusée et email envoyé.")
                         st.rerun()

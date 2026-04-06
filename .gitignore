@@ -1,0 +1,7 @@
+__pycache__/
+*.db
+*.csv
+*.parquet
+*.txt
+.env
+.DS_Store

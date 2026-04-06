@@ -19,6 +19,7 @@ import tempfile
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import threading
+import base64
 
 # URL exacte du Dashboard Streamlit (Mettre à jour si vous déployez l'application en ligne)
 # L'API étant sur data-real-time-2, le Dashboard a sûrement une URL différente (ex: meteo-pad.onrender.com).
@@ -85,13 +86,83 @@ def envoyer_email(dest, sujet, contenu):
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.set_debuglevel(1)  # Enable debug logging for deeper issues
             s.login(expediteur, mot_de_passe)
-            for d in dest_list:
-                s.sendmail(expediteur, d, msg.as_string())
+            # Send once to all recipients
+            s.sendmail(expediteur, dest_list, msg.as_string())
         return True
     except Exception as e:
-        print(f"Erreur Email : {e}")
+        st.error(f"Erreur d'envoi d'email : {e}")
         return False
+
+# ==========================================================
+# EMAILS PREMIUM & TEMPLATES
+# ==========================================================
+
+def generer_html_email(type_msg, nom, req_id, details=None):
+    """Génère un template HTML professionnel Premium avec dégradés et boutons."""
+    # Couleurs institutionnelles PAD
+    color_primary = "#004B8D"  # Bleu Royal
+    color_secondary = "#D4AF37" # Or
+    color_accent = "#1C2D4A"    # Marine
+    
+    if type_msg == "admin_nouvelle_demande":
+        sujet = f"🚨 Nouvelle Demande d'Accès PAD - {nom}"
+        libelle_status = "NOUVELLE DEMANDE"
+        msg_body = f"""
+            <p style="font-size: 16px; color: #555;">Une nouvelle demande de téléchargement a été déposée par <strong>{nom}</strong>.</p>
+            <div style="background-color: #f9f9f9; border-left: 4px solid {color_primary}; padding: 15px; margin: 20px 0;">
+                <strong>ID Demande :</strong> {req_id}<br>
+                <strong>Motif :</strong> {details}<br>
+            </div>
+            <p style="font-size: 14px; color: #777;">Veuillez valider ou refuser cette demande depuis votre tableau de bord ou via les boutons ci-dessous :</p>
+            <div style="text-align: center; margin-top: 30px;">
+                <a href="{APP_URL}/?action=valider&req_id={req_id}" style="background-color: #28a745; color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; margin-right: 10px;">✅ ACCEPTER</a>
+                <a href="{APP_URL}/?action=refuser&req_id={req_id}" style="background-color: #dc3545; color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold;">❌ REFUSER</a>
+            </div>
+        """
+    elif type_msg == "user_approuve":
+        sujet = "✅ Votre accès aux données PAD est PRÊT"
+        libelle_status = "DEMANDE APPROUVÉE"
+        msg_body = f"""
+            <p style="font-size: 16px; color: #555;">Bonjour <strong>{nom}</strong>,</p>
+            <p style="font-size: 16px; color: #555;">Nous avons le plaisir de vous informer que l'Administration du PAD a <strong>validé</strong> votre demande d'accès.</p>
+            <p style="font-size: 16px; color: #555; margin-bottom: 30px;">Vous pouvez maintenant télécharger l'historique complet en cliquant sur le bouton ci-dessous :</p>
+            <div style="text-align: center; margin: 40px 0;">
+                <a href="{APP_URL}/?dl_req_id={req_id}&format=excel" style="background: linear-gradient(135deg, #28a745, #218838); color: white; padding: 18px 35px; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 18px; box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);">📥 TÉLÉCHARGER LE FICHIER EXCEL</a>
+            </div>
+            <p style="text-align: center; font-size: 14px; color: #999;">Ou <a href="{APP_URL}/?dl_req_id={req_id}" style="color: {color_primary};">cliquez ici</a> pour configurer une période spécifique sur le site.</p>
+        """
+    else:  # refuse
+        sujet = "❌ Statut de votre demande d'accès PAD"
+        libelle_status = "DEMANDE NON-RETENUE"
+        msg_body = f"""
+            <p style="font-size: 16px; color: #555;">Bonjour <strong>{nom}</strong>,</p>
+            <p style="font-size: 16px; color: #555;">Nous vous remercions pour votre intérêt. Cependant, l'Administration ne peut pas donner suite à votre demande pour le moment.</p>
+            <p style="font-size: 14px; color: #777; margin-top: 20px;">Pour toute question supplémentaire, n'hésitez pas à nous contacter directement.</p>
+        """
+
+    html = f"""
+    <html>
+    <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 30px;">
+        <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1);">
+            <div style="background-color: {color_primary}; padding: 30px; text-align: center; color: white;">
+                <h2 style="margin: 0; letter-spacing: 2px; font-weight: 300;">PORT AUTONOME DE DOUALA</h2>
+                <div style="display: inline-block; margin-top: 10px; padding: 5px 15px; background: {color_secondary}; color: {color_accent}; font-size: 11px; font-weight: bold; border-radius: 20px;">{libelle_status}</div>
+            </div>
+            <div style="padding: 40px;">
+                {msg_body}
+            </div>
+            <div style="background-color: #fcfcfc; padding: 20px; text-align: center; border-top: 1px solid #eee; color: #aaa; font-size: 12px;">
+                Ceci est une notification automatique. Veuillez ne pas répondre directement.<br>
+                © 2024 Port Autonome de Douala - Direction de la Météorologie
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return sujet, html
+
 
 # ==========================================================
 # ROUTAGE PAR LIENS EMAILS (VALIDATION / REFUS ADMIN)
@@ -108,22 +179,19 @@ if "action" in params and "req_id" in params:
             if action == "valider":
                 cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (req_id,))
                 conn.commit()
-                msg_user = f"Bonjour {c_nom},<br><br>Votre demande d'accès aux données a été <b>approuvée</b>.<br>Veuillez cliquer sur ce lien pour télécharger vos données : <br><a href='{APP_URL}/?dl_req_id={req_id}'>📥 Accéder à mes données</a><br><br>Cordialement,<br>PAD Douala"
-                envoyer_email(c_email, "✅ Demande de données PAD Approuvée", msg_user)
-                st.success(f"✅ Demande #{req_id} VALIDÉE ! Un email a été envoyé au demandeur automatiquement.")
+                sujet, msg_user = generer_html_email("user_approuve", c_nom, req_id)
+                envoyer_email(c_email, sujet, msg_user)
+                st.success(f"✅ Demande #{req_id} VALIDÉE ! Un email Premium a été envoyé au demandeur.")
             elif action == "refuser":
                 cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (req_id,))
                 conn.commit()
-                msg_user = f"Bonjour {c_nom},<br><br>Nous regrettons de vous informer que l'Administration du PAD a décidé de <b>refuser</b> votre demande d'accès aux données pour le motif invoqué.<br>Nous vous remercions tout de même pour l'intérêt que vous portez à nos données.<br><br>Cordialement,<br>L'Administration du PAD Douala"
-                envoyer_email(c_email, "❌ Demande de données PAD Refusée", msg_user)
-                st.error(f"❌ Demande #{req_id} REFUSÉE ! Un email a été envoyé au demandeur automatiquement.")
+                sujet, msg_user = generer_html_email("user_refuse", c_nom, req_id)
+                envoyer_email(c_email, sujet, msg_user)
+                st.error(f"❌ Demande #{req_id} REFUSÉE ! Un email de notification a été envoyé.")
             
-            # Afficher un bouton pour retourner à l'accueil
             if st.button("⬅️ Retour au Dashboard"):
                 st.query_params.clear()
                 st.rerun()
-            
-            # On arrête le reste de l'application pour que la page charge INSTANTANÉMENT
             st.stop()
         else:
             st.info(f"ℹ️ La demande #{req_id} a déjà été traitée (Statut: {c_statut}).")
@@ -140,6 +208,9 @@ if "action" in params and "req_id" in params:
 
 if "dl_req_id" in params:
     st.session_state.req_id = params["dl_req_id"]
+    if "format" in params:
+        # Pour une réactivité immédiate sans recharger
+        st.session_state.dl_format = params["format"]
 
 
 # ==========================================================
@@ -387,31 +458,18 @@ with tab1:
                 lien_val = f"{APP_URL}/?action=valider&req_id={req_id}"
                 lien_ref = f"{APP_URL}/?action=refuser&req_id={req_id}"
                 
-                msg_admin = f"""
-                <p>Une nouvelle demande de téléchargement a été déposée.</p>
-                <b>ID:</b> {req_id}<br>
-                <b>Nom:</b> {nom}<br>
-                <b>Email:</b> {email_user}<br>
-                <b>Motif:</b> <span style="color:#555;">{raison}</span><br><br>
-                <b>Action rapide (cliquez sur l'un des boutons) :</b><br><br>
-                <a href="{lien_val}" style="padding:10px 15px; background-color:green; color:white; text-decoration:none; border-radius:5px; font-weight:bold;">✅ VALIDER LA DEMANDE</a> 
-                &nbsp;&nbsp;&nbsp;&nbsp;
-                <a href="{lien_ref}" style="padding:10px 15px; background-color:red; color:white; text-decoration:none; border-radius:5px; font-weight:bold;">❌ REFUSER LA DEMANDE</a>
-                <br><br><br>
-                <i>Vous pouvez aussi gérer cette demande depuis l'onglet Administration de l'application.</i>
-                """
-                
+                sujet, msg_admin = generer_html_email("admin_nouvelle_demande", nom, req_id, raison)
                 success = envoyer_email(
                     ["engoulouthierry62@gmail.com", "ulrichlangoul7@gmail.com"],
-                    f"🚨 DEMANDE ACCÈS PAD - {nom} [{req_id}]",
+                    sujet,
                     msg_admin
                 )
                 
                 if success:
                     st.session_state.req_id = req_id
+                    st.rerun()
                 else:
-                    st.error("⚠️ L'envoi de l'email à l'administrateur a échoué. Veuillez réessayer.")
-                st.rerun()
+                    st.error("⚠️ L'envoi de l'email à l'administrateur a échoué. Veuillez vérifier la connexion ou l'adresse email.")
     else:
         cursor.execute("SELECT statut FROM demandes WHERE id=?", (st.session_state.req_id,))
         row = cursor.fetchone()
@@ -427,8 +485,41 @@ with tab1:
                 st.session_state.req_id = None
                 st.rerun()
         elif statut == "valide":
-            st.success("✅ Accès autorisé ! Vous pouvez maintenant télécharger les données.")
+            # === EXPÉRIENCE PREMIUM : TÉLÉCHARGEMENT DIRECT ===
+            if "dl_format" in st.session_state and st.session_state.dl_format:
+                fmt = st.session_state.dl_format
+                st.session_state.dl_format = None
+                
+                st.toast(f"🚀 Préparation de votre fichier {fmt.upper()}...", icon="🪄")
+                with st.status(f"✨ Génération de votre fichier {fmt.upper()} en cours...", expanded=True) as status:
+                    st.write("🔍 Analyse de la base historique...")
+                    df = load_data()
+                    st.write("🧊 Formatage des données scientifiques...")
+                    if not df.empty:
+                        if fmt == "excel":
+                            xlsx_buffer = io.BytesIO()
+                            with pd.ExcelWriter(xlsx_buffer, engine="openpyxl") as writer:
+                                df.to_excel(writer, index=False, sheet_name="Meteo_Full")
+                            b64 = base64.b64encode(xlsx_buffer.getvalue()).decode()
+                            href = f'<a id="auto_dl" href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="full_history_pad.xlsx"><button style="padding:15px; font-size:18px; background-color:#28a745; color:white; border:none; border-radius:8px; cursor:pointer;">📥 Cliquez ici pour télécharger EXCEL</button></a>'
+                            st.markdown(href, unsafe_allow_html=True)
+                            st.components.v1.html("<script>var a = window.parent.document.getElementById('auto_dl'); if(a) a.click();</script>", height=0)
+                        elif fmt == "netcdf":
+                            with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+                                ds = df.set_index(['DateTime', 'Station']).to_xarray()
+                                ds.to_netcdf(tmp.name, engine="h5netcdf")
+                                tmp_path = tmp.name
+                            with open(tmp_path, "rb") as f:
+                                b64 = base64.b64encode(f.read()).decode()
+                            os.remove(tmp_path)
+                            href = f'<a id="auto_dl" href="data:application/x-netcdf;base64,{b64}" download="full_history.nc"><button style="padding:15px; font-size:18px; background-color:#17a2b8; color:white; border:none; border-radius:8px; cursor:pointer;">📥 Cliquez ici pour télécharger NETCDF</button></a>'
+                            st.markdown(href, unsafe_allow_html=True)
+                            st.components.v1.html("<script>var a = window.parent.document.getElementById('auto_dl'); if(a) a.click();</script>", height=0)
+                    status.update(label="✅ Fichier Prêt ! Le téléchargement a démarré.", state="complete", expanded=False)
+                st.balloons()
             
+            st.success("✅ Accès autorisé ! Vous pouvez maintenant télécharger les données.")
+                            
             st.divider()
             format_choisi = st.radio("Format d'exportation", ["Excel (.xlsx)", "NetCDF (.nc)"], horizontal=True)
 
@@ -499,50 +590,17 @@ with tab2:
                     if c1.button("✅ Valider", key=f"val_{d[0]}"):
                         cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (d[0],))
                         conn.commit()
-                        envoyer_email(
-                            d[3],
-                            "✅ Demande de données PAD Approuvée",
-                            f"Bonjour {d[1]},<br><br>Votre demande d'accès aux données a été <b>approuvée</b>.<br>Veuillez cliquer sur ce lien pour télécharger vos données : <br><a href='{APP_URL}/?dl_req_id={d[0]}'>📥 Accéder à mes données</a><br><br>Cordialement,<br>PAD Douala"
-                        )
-                        st.success(f"Demande {d[0]} validée et email envoyé.")
+                        sujet, msg_user = generer_html_email("user_approuve", d[1], d[0])
+                        envoyer_email(d[3], sujet, msg_user)
+                        st.success(f"Demande {d[0]} validée et email sent.")
                         st.rerun()
                     if c2.button("❌ Refuser", key=f"ref_{d[0]}"):
                         cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (d[0],))
                         conn.commit()
-                        envoyer_email(
-                            d[3],
-                            "❌ Demande de données PAD Refusée",
-                            f"Bonjour {d[1]},<br><br>Nous regrettons de vous informer que l'Administration du PAD a décidé de <b>refuser</b> votre demande d'accès aux données.<br>Nous vous remercions tout de même pour l'intérêt que vous portez à nos données.<br><br>Cordialement,<br>PAD Douala"
-                        )
-                        st.error(f"Demande {d[0]} refusée et email envoyé.")
+                        sujet, msg_user = generer_html_email("user_refuse", d[1], d[0])
+                        envoyer_email(d[3], sujet, msg_user)
+                        st.error(f"Demande {d[0]} refusée et email sent.")
                         st.rerun()
     elif password:
         st.error("Mot de passe incorrect")
 
-
-# ==========================================================
-# CARTE
-# ==========================================================
-
-st.subheader("Carte météo")
-
-st.components.v1.html(
-"""
-<div id="map" style="height:500px;"></div>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-var map = L.map('map').setView([3.848, 11.502], 12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OSM'}).addTo(map);
-var stations=[
-    {name:"SM 2",lat:3.8480,lng:11.5021},
-    {name:"SM 3",lat:3.7601,lng:11.3803},
-    {name:"SM 4",lat:3.9833,lng:11.3166}
-];
-stations.forEach(function(s){
-    L.marker([s.lat,s.lng]).addTo(map).bindPopup("<b>"+s.name+"</b>").openPopup();
-});
-</script>
-""",
-height=520
-)

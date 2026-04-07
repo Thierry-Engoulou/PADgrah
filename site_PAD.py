@@ -84,15 +84,6 @@ def envoyer_email(dest, sujet, contenu):
     msg["To"] = ", ".join(dest_list)
     msg.attach(MIMEText(contenu, "html"))
 
-    import socket
-    orig_getaddrinfo = socket.getaddrinfo
-    
-    # Forcer IPv4 (contourne l'erreur [Errno 101] Network is unreachable)
-    def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
-        return orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-
-    socket.getaddrinfo = getaddrinfo_ipv4
-
     success = False
     try:
         # Tentative 1 : SSL sur port 465
@@ -111,9 +102,6 @@ def envoyer_email(dest, sujet, contenu):
         except Exception as e_tls:
             st.error(f"Erreur d'envoi d'email : SSL({e_ssl}) | TLS({e_tls})")
             success = False
-    finally:
-        # Restaurer la configuration réseau d'origine
-        socket.getaddrinfo = orig_getaddrinfo
 
     return success
 

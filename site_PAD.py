@@ -84,16 +84,38 @@ def envoyer_email(dest, sujet, contenu):
     msg["To"] = ", ".join(dest_list)
     msg.attach(MIMEText(contenu, "html"))
 
+    import socket
+    orig_getaddrinfo = socket.getaddrinfo
+    
+    # Forcer IPv4 (contourne l'erreur [Errno 101] Network is unreachable)
+    def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+        return orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+    socket.getaddrinfo = getaddrinfo_ipv4
+
+    success = False
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-            s.set_debuglevel(1)  # Enable debug logging for deeper issues
+        # Tentative 1 : SSL sur port 465
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as s:
             s.login(expediteur, mot_de_passe)
-            # Send once to all recipients
             s.sendmail(expediteur, dest_list, msg.as_string())
-        return True
-    except Exception as e:
-        st.error(f"Erreur d'envoi d'email : {e}")
-        return False
+        success = True
+    except Exception as e_ssl:
+        try:
+            # Tentative 2 : TLS sur port 587 (Secours)
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as s:
+                s.starttls()
+                s.login(expediteur, mot_de_passe)
+                s.sendmail(expediteur, dest_list, msg.as_string())
+            success = True
+        except Exception as e_tls:
+            st.error(f"Erreur d'envoi d'email : SSL({e_ssl}) | TLS({e_tls})")
+            success = False
+    finally:
+        # Restaurer la configuration réseau d'origine
+        socket.getaddrinfo = orig_getaddrinfo
+
+    return success
 
 # ==========================================================
 # EMAILS PREMIUM & TEMPLATES

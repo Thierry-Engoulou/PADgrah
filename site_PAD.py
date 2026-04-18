@@ -21,9 +21,8 @@ from email.mime.multipart import MIMEMultipart
 import threading
 import base64
 
-# URL exacte du Dashboard Streamlit (Mettre à jour si vous déployez l'application en ligne)
-# L'API étant sur data-real-time-2, le Dashboard a sûrement une URL différente (ex: meteo-pad.onrender.com).
-APP_URL = "http://localhost:8501"
+# URL exacte du Dashboard Streamlit (Mettre à jour sur Render dans les variables d'environnement)
+APP_URL = os.getenv("APP_URL", "http://localhost:8501")
 
 # ==========================================================
 # CONFIG
@@ -181,39 +180,82 @@ params = st.query_params
 if "action" in params and "req_id" in params:
     action = params["action"]
     req_id = params["req_id"]
-    cursor.execute("SELECT nom, email, statut FROM demandes WHERE id=?", (req_id,))
+    cursor.execute("SELECT nom, structure, email, statut, raison FROM demandes WHERE id=?", (req_id,))
     row = cursor.fetchone()
-    if row:
-        c_nom, c_email, c_statut = row
-        if c_statut == "en_attente":
-            if action == "valider":
-                cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (req_id,))
-                conn.commit()
-                sujet, msg_user = generer_html_email("user_approuve", c_nom, req_id)
-                envoyer_email(c_email, sujet, msg_user)
-                st.success(f"✅ Demande #{req_id} VALIDÉE ! Un email Premium a été envoyé au demandeur.")
-            elif action == "refuser":
-                cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (req_id,))
-                conn.commit()
-                sujet, msg_user = generer_html_email("user_refuse", c_nom, req_id)
-                envoyer_email(c_email, sujet, msg_user)
-                st.error(f"❌ Demande #{req_id} REFUSÉE ! Un email de notification a été envoyé.")
+    
+    # CSS Premium pour la page de validation
+    st.markdown("""
+        <style>
+        .stApp {
+            background-color: #f8f9fa;
+        }
+        .main-card {
+            background-color: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+            text-align: center;
+            max-width: 700px;
+            margin: 50px auto;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 8px 20px;
+            border-radius: 50px;
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        .status-success { background-color: #d4edda; color: #155724; }
+        .status-error { background-color: #f8d7da; color: #721c24; }
+        .status-info { background-color: #d1ecf1; color: #0c5460; }
+        </style>
+    """, unsafe_allow_allow_html=True)
+
+    with st.container():
+        st.markdown('<div class="main-card">', unsafe_allow_html=True)
+        
+        if row:
+            c_nom, c_structure, c_email, c_statut, c_raison = row
             
-            if st.button("⬅️ Retour au Dashboard"):
-                st.query_params.clear()
-                st.rerun()
-            st.stop()
+            if c_statut == "en_attente":
+                if action == "valider":
+                    cursor.execute("UPDATE demandes SET statut='valide' WHERE id=?", (req_id,))
+                    conn.commit()
+                    sujet, msg_user = generer_html_email("user_approuve", c_nom, req_id)
+                    success_mail = envoyer_email(c_email, sujet, msg_user)
+                    
+                    st.markdown(f'<div class="status-badge status-success">✅ DEMANDE APPROUVÉE</div>', unsafe_allow_html=True)
+                    st.header(f"Demande de {c_nom} validée")
+                    st.write(f"Un email de confirmation a été envoyé à **{c_email}**.")
+                    st.balloons()
+                    
+                elif action == "refuser":
+                    cursor.execute("UPDATE demandes SET statut='refuse' WHERE id=?", (req_id,))
+                    conn.commit()
+                    sujet, msg_user = generer_html_email("user_refuse", c_nom, req_id)
+                    success_mail = envoyer_email(c_email, sujet, msg_user)
+                    
+                    st.markdown(f'<div class="status-badge status-error">❌ DEMANDE REFUSÉE</div>', unsafe_allow_html=True)
+                    st.header(f"Demande de {c_nom} refusée")
+                    st.write(f"Une notification a été envoyée à **{c_email}**.")
+                
+                st.info(f"Détails : {c_raison}")
+            else:
+                st.markdown(f'<div class="status-badge status-info">ℹ️ DÉJÀ TRAITÉE</div>', unsafe_allow_html=True)
+                st.header(f"Action déjà effectuée")
+                st.write(f"La demande #{req_id} a déjà le statut : **{c_statut}**.")
         else:
-            st.info(f"ℹ️ La demande #{req_id} a déjà été traitée (Statut: {c_statut}).")
-            if st.button("⬅️ Retour au Dashboard"):
-                st.query_params.clear()
-                st.rerun()
-            st.stop()
-    else:
-        st.warning(f"⚠️ Demande #{req_id} introuvable.")
-        if st.button("⬅️ Retour au Dashboard"):
+            st.markdown(f'<div class="status-badge status-error">⚠️ ERREUR</div>', unsafe_allow_html=True)
+            st.header("Demande introuvable")
+            st.write(f"L'identifiant `{req_id}` est incorrect ou la demande a été supprimée.")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🚀 Aller au Tableau de Bord", use_container_width=True):
             st.query_params.clear()
             st.rerun()
+            
+        st.markdown('</div>', unsafe_allow_html=True)
         st.stop()
 
 if "dl_req_id" in params:

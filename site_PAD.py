@@ -210,7 +210,7 @@ if "action" in params and "req_id" in params:
         .status-error { background-color: #f8d7da; color: #721c24; }
         .status-info { background-color: #d1ecf1; color: #0c5460; }
         </style>
-    """, unsafe_allow_allow_html=True)
+    """, unsafe_allow_html=True)
 
     with st.container():
         st.markdown('<div class="main-card">', unsafe_allow_html=True)

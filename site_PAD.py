@@ -76,11 +76,20 @@ def envoyer_email(dest, sujet, contenu):
         st.error("⚠️ Configuration manquante : RESEND_API_KEY n'est pas défini dans les variables d'environnement.")
         return False
 
-    # Resend attend une liste pour 'to' ou une chaîne séparée par des virgules
+    # Resend attend une liste pour 'to'
     if isinstance(dest, str):
         dest_list = [dest]
     else:
         dest_list = dest
+
+    # IMPORTANT: En mode test (onboarding), Resend ne permet d'envoyer qu'à l'adresse du compte.
+    # On filtre pour éviter l'erreur 403.
+    authorized_email = "engoulouthierry62@gmail.com"
+    if "onboarding@resend.dev" in "Meteo PAD <onboarding@resend.dev>":
+        # On ne garde que l'adresse autorisée pour éviter de bloquer l'envoi
+        dest_list = [email for email in dest_list if email.strip() == authorized_email]
+        if not dest_list:
+            dest_list = [authorized_email]
 
     payload = {
         "from": "Meteo PAD <onboarding@resend.dev>",

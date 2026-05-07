@@ -69,40 +69,32 @@ conn.commit()
 # ==========================================================
 
 def envoyer_email(dest, sujet, contenu):
-    if isinstance(dest, str):
-        dest_list = [dest]
-    else:
-        dest_list = dest
+    """Envoie un email via un relais Google Script pour contourner les blocages SMTP de Render."""
+    url_relais = os.getenv("RELAIS_URL")
+    
+    if not url_relais:
+        st.error("⚠️ Configuration manquante : RELAIS_URL n'est pas défini dans les variables d'environnement.")
+        return False
 
-    expediteur = "engoulouthierry62@gmail.com"
-    mot_de_passe = "tfzybsaqrlyntkox"
+    if isinstance(dest, list):
+        dest = ",".join(dest)
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = sujet
-    msg["From"] = expediteur
-    msg["To"] = ", ".join(dest_list)
-    msg.attach(MIMEText(contenu, "html"))
+    payload = {
+        "dest": dest,
+        "sujet": sujet,
+        "contenu": contenu
+    }
 
-    success = False
     try:
-        # Tentative 1 : SSL sur port 465
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as s:
-            s.login(expediteur, mot_de_passe)
-            s.sendmail(expediteur, dest_list, msg.as_string())
-        success = True
-    except Exception as e_ssl:
-        try:
-            # Tentative 2 : TLS sur port 587 (Secours)
-            with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as s:
-                s.starttls()
-                s.login(expediteur, mot_de_passe)
-                s.sendmail(expediteur, dest_list, msg.as_string())
-            success = True
-        except Exception as e_tls:
-            st.error(f"Erreur d'envoi d'email : SSL({e_ssl}) | TLS({e_tls})")
-            success = False
-
-    return success
+        response = requests.post(url_relais, json=payload, timeout=25)
+        if response.status_code == 200 and "OK" in response.text:
+            return True
+        else:
+            st.error(f"❌ Erreur Relais HTTP ({response.status_code}) : {response.text}")
+            return False
+    except Exception as e:
+        st.error(f"❌ Erreur de connexion au relais : {e}")
+        return False
 
 # ==========================================================
 # EMAILS PREMIUM & TEMPLATES

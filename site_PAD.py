@@ -69,34 +69,40 @@ conn.commit()
 # ==========================================================
 
 def envoyer_email(dest, sujet, contenu):
-    """Envoie un email via un relais HTTP (Google Script) pour contourner les blocages SMTP de Render."""
-    url_relais = os.getenv("RELAIS_URL")
+    """Envoie un email via l'API Resend pour une fiabilité maximale sur Render."""
+    api_key = os.getenv("RESEND_API_KEY")
     
-    if not url_relais:
-        st.error("⚠️ Configuration manquante : RELAIS_URL n'est pas défini dans les variables d'environnement.")
+    if not api_key:
+        st.error("⚠️ Configuration manquante : RESEND_API_KEY n'est pas défini dans les variables d'environnement.")
         return False
 
-    if isinstance(dest, list):
-        dest = ",".join(dest)  # Pas d'espace après la virgule
+    # Resend attend une liste pour 'to' ou une chaîne séparée par des virgules
+    if isinstance(dest, str):
+        dest_list = [dest]
+    else:
+        dest_list = dest
 
     payload = {
-        "dest": dest,
-        "sujet": sujet,
-        "contenu": contenu
+        "from": "Meteo PAD <onboarding@resend.dev>",
+        "to": dest_list,
+        "subject": sujet,
+        "html": contenu
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
 
     try:
-        # Envoi via POST vers le relais Google Script
-        # On essaie d'abord en JSON, si ça échoue on pourra tenter en DATA (form-urlencoded)
-        response = requests.post(url_relais, json=payload, timeout=20)
-        
-        if response.status_code == 200 and ("success" in response.text.lower() or "ok" in response.text.lower() or "envoi" in response.text.lower()):
+        response = requests.post("https://api.resend.com/emails", json=payload, headers=headers, timeout=20)
+        if response.status_code in [200, 201]:
             return True
         else:
-            st.error(f"❌ Erreur Relais HTTP ({response.status_code}) : {response.text}")
+            st.error(f"❌ Erreur Resend ({response.status_code}) : {response.text}")
             return False
     except Exception as e:
-        st.error(f"❌ Erreur de connexion au relais : {e}")
+        st.error(f"❌ Erreur de connexion à Resend : {e}")
         return False
 
 # ==========================================================

@@ -77,7 +77,7 @@ def envoyer_email(dest, sujet, contenu):
         return False
 
     if isinstance(dest, list):
-        dest = ", ".join(dest)
+        dest = ",".join(dest)  # Pas d'espace après la virgule
 
     payload = {
         "dest": dest,
@@ -87,8 +87,10 @@ def envoyer_email(dest, sujet, contenu):
 
     try:
         # Envoi via POST vers le relais Google Script
+        # On essaie d'abord en JSON, si ça échoue on pourra tenter en DATA (form-urlencoded)
         response = requests.post(url_relais, json=payload, timeout=20)
-        if response.status_code == 200:
+        
+        if response.status_code == 200 and ("success" in response.text.lower() or "ok" in response.text.lower() or "envoi" in response.text.lower()):
             return True
         else:
             st.error(f"❌ Erreur Relais HTTP ({response.status_code}) : {response.text}")

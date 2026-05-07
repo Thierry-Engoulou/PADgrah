@@ -69,56 +69,40 @@ conn.commit()
 # ==========================================================
 
 def envoyer_email(dest, sujet, contenu):
-    """Envoie un email via l'API Resend pour une fiabilité maximale sur Render."""
-    api_key = os.getenv("RESEND_API_KEY")
-    
-    if not api_key:
-        st.error("⚠️ Configuration manquante : RESEND_API_KEY n'est pas défini dans les variables d'environnement.")
-        return False
-
-    # Resend attend une liste pour 'to'
     if isinstance(dest, str):
         dest_list = [dest]
     else:
         dest_list = dest
 
-    # SÉCURITÉ SANDBOX : Si on utilise onboarding@resend.dev, on ne peut envoyer qu'à l'admin.
-    # On redirige les emails vers l'admin pour éviter l'erreur 403 et permettre de voir le résultat.
-    authorized_email = "engoulouthierry62@gmail.com"
-    final_dest_list = []
-    for email in dest_list:
-        if email.strip().lower() == authorized_email.lower():
-            final_dest_list.append(email)
-        else:
-            # On remplace par l'admin et on ajoute une note dans le sujet plus tard
-            if authorized_email not in final_dest_list:
-                final_dest_list.append(authorized_email)
-    
-    if final_dest_list != dest_list:
-        sujet = f"[TEST -> {dest_list[0]}] " + sujet
+    expediteur = "engoulouthierry62@gmail.com"
+    mot_de_passe = "tfzybsaqrlyntkox"
 
-    payload = {
-        "from": "Meteo PAD <onboarding@resend.dev>",
-        "to": final_dest_list,
-        "subject": sujet,
-        "html": contenu
-    }
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = sujet
+    msg["From"] = expediteur
+    msg["To"] = ", ".join(dest_list)
+    msg.attach(MIMEText(contenu, "html"))
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
+    success = False
     try:
-        response = requests.post("https://api.resend.com/emails", json=payload, headers=headers, timeout=20)
-        if response.status_code in [200, 201]:
-            return True
-        else:
-            st.error(f"❌ Erreur Resend ({response.status_code}) : {response.text}")
-            return False
-    except Exception as e:
-        st.error(f"❌ Erreur de connexion à Resend : {e}")
-        return False
+        # Tentative 1 : SSL sur port 465
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as s:
+            s.login(expediteur, mot_de_passe)
+            s.sendmail(expediteur, dest_list, msg.as_string())
+        success = True
+    except Exception as e_ssl:
+        try:
+            # Tentative 2 : TLS sur port 587 (Secours)
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as s:
+                s.starttls()
+                s.login(expediteur, mot_de_passe)
+                s.sendmail(expediteur, dest_list, msg.as_string())
+            success = True
+        except Exception as e_tls:
+            st.error(f"Erreur d'envoi d'email : SSL({e_ssl}) | TLS({e_tls})")
+            success = False
+
+    return success
 
 # ==========================================================
 # EMAILS PREMIUM & TEMPLATES
@@ -147,7 +131,7 @@ def generer_html_email(type_msg, nom, req_id, details=None):
             </div>
         """
     elif type_msg == "user_approuve":
-        sujet = "Acces aux donnees PAD valide"
+        sujet = "✅ Votre accès aux données PAD est PRÊT"
         libelle_status = "DEMANDE APPROUVÉE"
         msg_body = f"""
             <p style="font-size: 16px; color: #555;">Bonjour <strong>{nom}</strong>,</p>

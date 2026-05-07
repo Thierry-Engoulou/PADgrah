@@ -82,9 +82,24 @@ def envoyer_email(dest, sujet, contenu):
     else:
         dest_list = dest
 
+    # SÉCURITÉ SANDBOX : Si on utilise onboarding@resend.dev, on ne peut envoyer qu'à l'admin.
+    # On redirige les emails vers l'admin pour éviter l'erreur 403 et permettre de voir le résultat.
+    authorized_email = "engoulouthierry62@gmail.com"
+    final_dest_list = []
+    for email in dest_list:
+        if email.strip().lower() == authorized_email.lower():
+            final_dest_list.append(email)
+        else:
+            # On remplace par l'admin et on ajoute une note dans le sujet plus tard
+            if authorized_email not in final_dest_list:
+                final_dest_list.append(authorized_email)
+    
+    if final_dest_list != dest_list:
+        sujet = f"[TEST -> {dest_list[0]}] " + sujet
+
     payload = {
         "from": "Meteo PAD <onboarding@resend.dev>",
-        "to": dest_list,
+        "to": final_dest_list,
         "subject": sujet,
         "html": contenu
     }

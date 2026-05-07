@@ -82,15 +82,6 @@ def envoyer_email(dest, sujet, contenu):
     else:
         dest_list = dest
 
-    # IMPORTANT: En mode test (onboarding), Resend ne permet d'envoyer qu'à l'adresse du compte.
-    # On filtre pour éviter l'erreur 403.
-    authorized_email = "engoulouthierry62@gmail.com"
-    if "onboarding@resend.dev" in "Meteo PAD <onboarding@resend.dev>":
-        # On ne garde que l'adresse autorisée pour éviter de bloquer l'envoi
-        dest_list = [email for email in dest_list if email.strip() == authorized_email]
-        if not dest_list:
-            dest_list = [authorized_email]
-
     payload = {
         "from": "Meteo PAD <onboarding@resend.dev>",
         "to": dest_list,
@@ -141,7 +132,7 @@ def generer_html_email(type_msg, nom, req_id, details=None):
             </div>
         """
     elif type_msg == "user_approuve":
-        sujet = "✅ Votre accès aux données PAD est PRÊT"
+        sujet = "Acces aux donnees PAD valide"
         libelle_status = "DEMANDE APPROUVÉE"
         msg_body = f"""
             <p style="font-size: 16px; color: #555;">Bonjour <strong>{nom}</strong>,</p>
